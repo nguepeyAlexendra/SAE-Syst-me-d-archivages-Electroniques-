@@ -26,8 +26,7 @@ class LoginSerializer(serializers.Serializer):
         # 1. On revérifie la règle de domaine, même si React l'a déjà fait avant
         #    (sécurité : ne jamais faire confiance uniquement au frontend)
         config = ConfigurationConnexion.get_configuration()
-        domaine = config.domaine_email_autorise
-        if domaine and not email.lower().endswith(domaine.lower()):
+        if not config.email_est_autorise(email):
             return None, "Cet email n'est pas autorisé à se connecter."
 
         # 2. On cherche l'utilisateur correspondant à cet email
