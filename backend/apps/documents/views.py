@@ -1,13 +1,17 @@
 from rest_framework import generics, permissions, parsers, filters
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from django.db.models import Count
+from .models import Document
+
+from django.utils import timezone
+from django.db.models import Q
+from datetime import timedelta
 
 from .models import Document, Categorie, Tag
 from .serializers import DocumentSerializer, CategorieSerializer, TagSerializer
 from .services import executer_pipeline
-
-from django.utils import timezone
-from datetime import timedelta
-from rest_framework.views import APIView
-from rest_framework.response import Response
 
 
 class DocumentListCreateView(generics.ListCreateAPIView):
@@ -22,9 +26,8 @@ class DocumentListCreateView(generics.ListCreateAPIView):
     search_fields = ['titre', 'contenu_texte']
     ordering_fields = ['titre', 'date_depot', 'taille_fichier']
 
-def get_queryset(self):
-        from django.db.models import Q
-
+    # ✅ CORRECTION : Indentation de 4 espaces pour être DANS la classe
+    def get_queryset(self):
         utilisateur = self.request.user
         base = Document.objects.filter(est_supprime=False)
 
@@ -37,14 +40,15 @@ def get_queryset(self):
             | Q(est_confidentiel=True, utilisateurs_autorises=utilisateur)
         ).distinct()
     
-    
-def perform_create(self, serializer):
+    # ✅ CORRECTION : Indentation de 4 espaces pour être DANS la classe
+    def perform_create(self, serializer):
         # On force le "déposant" à être l'utilisateur connecté,
         # impossible pour React de tricher en envoyant un autre utilisateur.
         document = serializer.save(depose_par=self.request.user)
 
         # Déclenche immédiatement le pipeline ETL (version synchrone pour l'instant)
         executer_pipeline(document)
+
 
 class CategorieListView(generics.ListCreateAPIView):
     queryset = Categorie.objects.all()
@@ -57,13 +61,13 @@ class TagListView(generics.ListCreateAPIView):
     serializer_class = TagSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+
 class DocumentDetailView(generics.RetrieveAPIView):
     """GET /api/documents/<id>/ -> détail d'un document précis (utilisé pour le suivi du pipeline)"""
     serializer_class = DocumentSerializer
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        from django.db.models import Q
         utilisateur = self.request.user
         if utilisateur.is_staff:
             return Document.objects.all()
@@ -72,8 +76,7 @@ class DocumentDetailView(generics.RetrieveAPIView):
             | Q(est_confidentiel=True, depose_par=utilisateur)
             | Q(est_confidentiel=True, utilisateurs_autorises=utilisateur)
         ).distinct()
-    
-    
+
 
 def _verifier_droit_modification(document, utilisateur):
     """Seuls le déposant, les utilisateurs autorisés, et l'admin peuvent modifier/supprimer."""
@@ -168,3 +171,62 @@ class CorbeilleListeView(generics.ListAPIView):
         if utilisateur.is_staff:
             return Document.objects.filter(est_supprime=True)
         return Document.objects.filter(est_supprime=True, depose_par=utilisateur)
+    
+
+class AdminStatsView(APIView):
+    """
+    GET /api/admin/stats/
+    Renvoie les statistiques globales pour le tableau de bord admin.
+    """
+    permission_classes = [IsAuthenticated] # Tu peux mettre IsAdminUser si réservé aux admins
+
+    def get(self, request):
+        # On exclut les documents supprimés (corbeille) des stats
+        base_queryset = Document.objects.filter(est_supprime=False)
+
+        # 1. Comptages globaux
+        total_documents = base_queryset.count()
+        en_cours = base_queryset.filter(statut=Document.Statut.EN_COURS).count()
+        valide = base_queryset.filter(statut=Document.Statut.VALIDE).count()
+        rejete = base_queryset.filter(statut=Document.Statut.REJETE).count()
+
+        # 2. Répartition par groupe (documents, images, media, autres)
+        stats_par_groupe = base_queryset.values('groupe').annotate(
+            total=Count('groupe')
+        ).order_by('-total')
+
+        # 3. (Optionnel) Répartition par type MIME
+        stats_par_mime = base_queryset.values('type_mime').annotate(
+            total=Count('type_mime')
+        ).order_by('-total')[:5] # Top 5 des types de fichiers
+
+        return Response({
+            "total": total_documents,
+            "en_cours": en_cours,
+            "valide": valide,
+            "rejete": rejete,
+            "par_groupe": list(stats_par_groupe),
+            "top_types": list(stats_par_mime)
+        })
+class AdminConfigurationView(APIView):
+    """
+    GET /api/admin/configuration/
+    Renvoie la configuration du système pour le dashboard admin.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Tu pourras remplir ceci avec de vraies données plus tard si besoin
+        return Response({
+            "max_file_size_mb": 50,
+            "allowed_mime_types": [
+                "application/pdf",
+                "application/msword",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "image/jpeg",
+                "image/png",
+                "text/plain"
+            ],
+            "retention_days": 30,
+            "pipeline_active": True
+        })

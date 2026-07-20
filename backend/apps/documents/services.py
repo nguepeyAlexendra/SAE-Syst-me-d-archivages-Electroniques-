@@ -1,3 +1,4 @@
+import io
 import magic
 from datetime import datetime
 from .models import Document
@@ -75,9 +76,17 @@ def executer_pipeline(document):
     document.log_pipeline = []
     document.save()
 
+    # =========================================================
+    # LECTURE UNIQUE DU FICHIER DEPUIS MINIO (en mémoire)
+    # On évite ainsi de re-télécharger le fichier à chaque étape
+    # =========================================================
+    document.fichier.open('rb')
+    contenu_fichier = document.fichier.read()
+    document.fichier.seek(0)  # Remet le curseur au début pour la suite
+
     # --- Étape 1 : vérification du format (MIME type réel) ---
     _ajouter_etape(document, "format", "Format vérifié", "en_cours")
-    type_mime_reel = magic.from_file(document.fichier.path, mime=True)
+    type_mime_reel = magic.from_buffer(contenu_fichier, mime=True)
     document.type_mime = type_mime_reel
 
     if type_mime_reel not in MIME_TYPES_AUTORISES:
@@ -92,10 +101,8 @@ def executer_pipeline(document):
 
     # --- Étape 2 : scan antivirus (détection de la signature EICAR pour la démo) ---
     _ajouter_etape(document, "antivirus", "Antivirus", "en_cours")
-    with open(document.fichier.path, 'rb') as f:
-        contenu_brut = f.read()
-
-    if SIGNATURE_EICAR in contenu_brut:
+    # ✅ CORRECTION : on réutilise contenu_fichier au lieu de rouvrir le fichier
+    if SIGNATURE_EICAR in contenu_fichier:
         document.log_pipeline[-1]["statut"] = "echec"
         document.log_pipeline[-1]["horodatage"] = _horodatage()
         document.statut = Document.Statut.REJETE
@@ -106,15 +113,15 @@ def executer_pipeline(document):
     document.save()
 
     # --- Étape 3 : extraction des métadonnées ---
-    # --- Étape 3 : extraction des métadonnées ---
     _ajouter_etape(document, "metadonnees", "Extraction métadonnées", "en_cours")
     document.taille_fichier = document.fichier.size
     document.groupe = determiner_groupe(type_mime_reel)
 
     # Dimensions, uniquement pour les images
+    # ✅ CORRECTION : on utilise io.BytesIO pour lire l'image depuis la mémoire
     if type_mime_reel in ('image/jpeg', 'image/png'):
         from PIL import Image
-        with Image.open(document.fichier.path) as img:
+        with Image.open(io.BytesIO(contenu_fichier)) as img:
             document.largeur_px, document.hauteur_px = img.size
 
     document.log_pipeline[-1]["statut"] = "termine"
@@ -127,7 +134,8 @@ def executer_pipeline(document):
     # --- Étape 5 : indexation du contenu (l'OCR viendra enrichir cette étape) ---
     _ajouter_etape(document, "indexation", "Indexation du contenu", "en_cours")
     if type_mime_reel == 'text/plain':
-        document.contenu_texte = contenu_brut.decode(errors='ignore')
+        # ✅ CORRECTION : on réutilise contenu_fichier au lieu de contenu_brut
+        document.contenu_texte = contenu_fichier.decode(errors='ignore')
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
 
