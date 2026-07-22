@@ -151,3 +151,23 @@ AWS_S3_USE_SSL = env.bool("MINIO_USE_SSL", default=False)
 AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
 AWS_QUERYSTRING_AUTH = True
+
+# Envoi réel d'emails via SMTP (Gmail)
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'emmanuellenjomo07@gmail.com'  # <-- Mettez VOTRE adresse Gmail ici
+EMAIL_HOST_PASSWORD = 'k q g v d m z d d v h h q d j j'  # <-- Voir explication ci-dessous ⚠️
+DEFAULT_FROM_EMAIL = 'emmanuellenjomo07@gmail.com'
+SITE_URL = 'http://localhost:5173'
+
+# ⚠️ Pour voir les erreurs détaillées dans le terminal
+DEBUG = True
+
+# ==========================================
+# CONFIGURATION MINIO
+# ==========================================
+MINIO_ENDPOINT = 'localhost:9000'      # L'adresse de votre serveur MinIO
+MINIO_ACCESS_KEY = 'minioadmin'        # Votre Access Key MinIO
+MINIO_SECRET_KEY = 'minioadmin'     # Votre Secret Key MinIO

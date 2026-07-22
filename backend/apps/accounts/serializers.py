@@ -3,6 +3,7 @@ from .models import ConfigurationConnexion
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from .models import ProfilUtilisateur
+from .models import DomaineEmail
 
 
 class VerificationEmailSerializer(serializers.Serializer):
@@ -65,9 +66,16 @@ class ConfigurationConnexionSerializer(serializers.ModelSerializer):
 class ProfilSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProfilUtilisateur
-        fields = ['photo']
+        fields = ['photo', 'changement_mdp_obligatoire']
 
 
 class ChangerMotDePasseSerializer(serializers.Serializer):
     ancien_mot_de_passe = serializers.CharField(write_only=True)
-    nouveau_mot_de_passe = serializers.CharField(write_only=True, min_length=8)      
+    nouveau_mot_de_passe = serializers.CharField(write_only=True, min_length=8)    
+
+
+class DomaineEmailSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DomaineEmail
+        fields = ['id', 'domaine', 'actif', 'date_ajout']
+        read_only_fields = ['date_ajout']  
