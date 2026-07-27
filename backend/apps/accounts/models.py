@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from apps.documents.models import Departement
 
 
 class DomaineEmail(models.Model):
@@ -79,6 +80,13 @@ def chemin_photo(instance, filename):
     ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
     return f'profils/{instance.utilisateur.id}/photo.{ext}'
 
+from django.db import models
+from django.contrib.auth.models import User
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from apps.documents.models import Departement
+
+# ... (Garde les classes DomaineEmail et ConfigurationConnexion telles quelles) ...
 
 class ProfilUtilisateur(models.Model):
     utilisateur = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profil')
@@ -87,9 +95,28 @@ class ProfilUtilisateur(models.Model):
         default=True,
         help_text="Si True, l'utilisateur doit changer son mot de passe à la prochaine connexion."
     )
+    
+    # 1. DÉPARTEMENT PRINCIPAL : optionnel (les admins peuvent ne pas en avoir)
+    departement = models.ForeignKey(
+        Departement, 
+        on_delete=models.PROTECT,
+        null=True, 
+        blank=True,
+        related_name='membres',
+        help_text="Département principal de l'utilisateur (optionnel pour les admins)."
+    )
+
+    # 2. NOUVEAU : DÉPARTEMENTS SUPPLÉMENTAIRES AUTORISÉS
+    departements_autorises = models.ManyToManyField(
+        Departement, 
+        blank=True, # Optionnel : un utilisateur peut n'avoir que son département principal
+        related_name='acces_externe',
+        help_text="Départements supplémentaires auxquels l'admin a donné accès à cet utilisateur."
+    )
 
     def __str__(self):
-        return f"Profil de {self.utilisateur.username}"
+        dept = self.departement.nom if self.departement else 'Aucun département'
+        return f"Profil de {self.utilisateur.username} ({dept})"
 
 
 @receiver(post_save, sender=User)

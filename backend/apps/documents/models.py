@@ -46,7 +46,14 @@ class Document(models.Model):
         REJETE = 'rejete', 'Rejeté'
 
     titre = models.CharField(max_length=255)
+    # apps/documents/models.py
     fichier = models.FileField(upload_to='documents/%Y/%m/')
+    miniature = models.ImageField(
+    upload_to='miniatures/%Y/%m/', 
+    null=True, 
+    blank=True, 
+    help_text="Aperçu généré automatiquement (1ère page pour les PDF)"
+)
     type_source = models.CharField(
         max_length=20, choices=TypeSource.choices, default=TypeSource.NUMERIQUE
     )
@@ -77,6 +84,10 @@ class Document(models.Model):
     utilisateurs_autorises = models.ManyToManyField(
         User, blank=True, related_name='documents_autorises'
     )
+    departements_autorises = models.ManyToManyField(
+        'Departement', blank=True, related_name='documents_autorises',
+        help_text="Départements supplémentaires autorisés à voir ce document"
+    )
 
     est_epingle = models.BooleanField(default=False)
     tentative_count = models.PositiveIntegerField(default=0)
@@ -100,6 +111,7 @@ class LogAction(models.Model):
     class TypeAction(models.TextChoices):
         SUPPRESSION = 'suppression', 'Suppression'
         REJET = 'rejet', 'Rejet ETL'
+        VALIDATION = 'validation', 'Validation ETL'
         MODIFICATION = 'modification', 'Modification'
 
     document = models.ForeignKey(Document, on_delete=models.SET_NULL, null=True, blank=True, related_name='logs')

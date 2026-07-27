@@ -15,7 +15,7 @@ from rest_framework.views import APIView
 
 from apps.documents.models import ConnexionLog
 
-from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail
+from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail, Departement
 from .serializers import (
     ChangerMotDePasseSerializer,
     ConfigurationConnexionSerializer,
@@ -26,7 +26,6 @@ from .serializers import (
 )
 
 
-# --- 🎨 TEMPLATE HTML POUR L'ENVOI DES IDENTIFIANTS (DESIGN SOBRE & PROFESSIONNEL) ---
 EMAIL_HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fr">
@@ -123,9 +122,16 @@ class LoginView(APIView):
             pass
 
         changement_mdp_obligatoire = False
+        photo_url = None
+        departement_data = None
+
         try:
             profil = utilisateur.profil
             changement_mdp_obligatoire = profil.changement_mdp_obligatoire
+            if profil.photo:
+                photo_url = profil.photo.url
+            if profil.departement:
+                departement_data = {"id": profil.departement.id, "nom": profil.departement.nom}
         except Exception:
             pass
 
@@ -137,6 +143,8 @@ class LoginView(APIView):
                 "username": utilisateur.username,
                 "email": utilisateur.email,
                 "est_admin": utilisateur.is_staff,
+                "photo": photo_url,
+                "departement": departement_data,
             }
         }, status=status.HTTP_200_OK)
     
@@ -200,26 +208,47 @@ class AdminUserListView(generics.ListCreateAPIView):
         result = []
         for u in users:
             connexions = ConnexionLog.objects.filter(utilisateur=u).values('ip_address', 'user_agent', 'date_connexion')[:5]
+            dept = None
+            try:
+                if hasattr(u, 'profil') and u.profil.departement:
+                    dept = {"id": u.profil.departement.id, "nom": u.profil.departement.nom}
+            except Exception:
+                pass
+            photo_url = None
+            try:
+                if hasattr(u, 'profil') and u.profil.photo:
+                    photo_url = u.profil.photo.url
+            except Exception:
+                pass
             result.append({
                 "id": u.id,
                 "username": u.username,
                 "email": u.email,
                 "est_admin": u.is_staff,
                 "est_actif": u.is_active,
-                "photo": u.profil.photo.url if hasattr(u, 'profil') and u.profil.photo else None,
+                "photo": photo_url,
                 "appareils": list(connexions),
+                "departement": dept,
             })
         return Response(result)
 
     def post(self, request):
         username = request.data.get('username', '').strip()
         email = request.data.get('email', '').strip()
+        departement_id = request.data.get('departement_id')
         
         if not username or not email:
             return Response({"erreur": "Nom d'utilisateur et email requis."}, status=status.HTTP_400_BAD_REQUEST)
-            
+
         if User.objects.filter(Q(username__iexact=username) | Q(email__iexact=email)).exists():
             return Response({"erreur": "Nom d'utilisateur ou email déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST)
+
+        departement = None
+        if departement_id:
+            try:
+                departement = Departement.objects.get(id=departement_id)
+            except Departement.DoesNotExist:
+                return Response({"erreur": "Département invalide."}, status=status.HTTP_400_BAD_REQUEST)
 
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         password = ''.join(secrets.choice(alphabet) for _ in range(12))
@@ -231,6 +260,8 @@ class AdminUserListView(generics.ListCreateAPIView):
         user = User.objects.create_user(username=username, email=email, password=password, is_active=True)
         
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
+        if departement:
+            profil.departement = departement
         profil.changement_mdp_obligatoire = True
         profil.save()
 
@@ -295,12 +326,40 @@ class AdminUserToggleAdminView(APIView):
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
-# ==============================================================================
-# NOUVELLES VUES POUR LA GESTION DES DOMAINES EMAIL
-# ==============================================================================
+
+class AdminUserDepartementsAutorisesView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk)
+            profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
+            return Response({
+                "departements_autorises": list(profil.departements_autorises.values_list('id', flat=True)),
+                "departements_autorises_noms": [d.nom for d in profil.departements_autorises.all()],
+                "departement": profil.departement_id,
+                "departement_nom": profil.departement.nom if profil.departement else None,
+            })
+        except User.DoesNotExist:
+            return Response({"erreur": "Utilisateur introuvable."}, status=404)
+
+    def patch(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk)
+            profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
+            dept_ids = request.data.get('departements_autorises', [])
+            if not isinstance(dept_ids, list):
+                return Response({"erreur": "departements_autorises doit être une liste."}, status=400)
+            profil.departements_autorises.set(dept_ids)
+            return Response({
+                "departements_autorises": list(profil.departements_autorises.values_list('id', flat=True)),
+                "departements_autorises_noms": [d.nom for d in profil.departements_autorises.all()],
+            })
+        except User.DoesNotExist:
+            return Response({"erreur": "Utilisateur introuvable."}, status=404)
+
 
 class DomaineEmailViewSet(viewsets.ModelViewSet):
-    """ViewSet pour gérer les domaines d'email autorisés (CRUD)"""
     queryset = DomaineEmail.objects.all()
     serializer_class = DomaineEmailSerializer
     permission_classes = [IsAdminUser]
@@ -318,7 +377,6 @@ class DomaineEmailViewSet(viewsets.ModelViewSet):
 
 
 class DomaineEmailBulkView(APIView):
-    """Vue pour activer/désactiver plusieurs domaines en une seule requête"""
     permission_classes = [IsAdminUser]
     
     def post(self, request):

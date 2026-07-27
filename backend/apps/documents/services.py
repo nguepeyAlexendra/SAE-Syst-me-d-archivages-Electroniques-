@@ -2,37 +2,54 @@ import io
 import magic
 from datetime import datetime
 from .models import Document, LogAction
+from django.core.files.base import ContentFile
 
-# Types de fichiers autorisés (vérifiés par leur contenu réel, pas leur extension)
-MIME_TYPES_AUTORISES = [
-    # --- Documents ---
-    'application/pdf',
-    'application/msword',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'text/plain',
-    'text/csv',
-    # --- Images ---
-    'image/jpeg',
-    'image/png',
-    # --- Média ---
-    'video/mp4',
-    'audio/mpeg',
-]
+# ✅ Support des images HEIC/HEIF (iPhone)
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    HEIF_DISPONIBLE = True
+except ImportError:
+    HEIF_DISPONIBLE = False  # Les autres formats fonctionneront quand même
 
-# Regroupement par section de sidebar
+
+# ---------------------------------------------------------------------------
+# GROUPES_MIME est la SEULE source de vérité. MIME_TYPES_AUTORISES en est
+# dérivé automatiquement pour qu'il soit IMPOSSIBLE que les deux se
+# désynchronisent.
+# ---------------------------------------------------------------------------
 GROUPES_MIME = {
     'documents': [
         'application/pdf', 'application/msword',
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/vnd.ms-excel', 'application/vnd.ms-powerpoint',
         'text/plain', 'text/csv',
+        'application/rtf', 'text/rtf',
+        'application/vnd.oasis.opendocument.text',
+        'application/vnd.oasis.opendocument.spreadsheet',
+        'application/vnd.oasis.opendocument.presentation',
+        'application/zip',
+        'application/x-zip-compressed',
     ],
-    'images': ['image/jpeg', 'image/png'],
-    'medias': ['video/mp4', 'audio/mpeg'],
+    'images': [
+        'image/jpeg', 'image/png', 'image/heic', 'image/heif',
+        'image/webp', 'image/gif', 'image/bmp', 'image/tiff', 'image/tif',
+    ],
+    'medias': [
+        'video/mp4', 'video/quicktime',
+        'video/x-matroska',
+        'video/x-msvideo',
+        'audio/mpeg', 'audio/wav', 'audio/wave', 'audio/x-wav',
+        'audio/mp4', 'audio/x-m4a',
+        'audio/ogg',
+    ],
 }
+
+MIME_TYPES_AUTORISES = [m for groupe in GROUPES_MIME.values() for m in groupe]
+EXTENSIONS_HEIC = ('.heic', '.heif')
+SIGNATURE_EICAR = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
 
 
 def determiner_groupe(type_mime):
@@ -40,10 +57,7 @@ def determiner_groupe(type_mime):
     for groupe, types in GROUPES_MIME.items():
         if type_mime in types:
             return groupe
-    return None  # Type non autorisé
-
-
-SIGNATURE_EICAR = b"X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
+    return None
 
 
 def _horodatage():
@@ -60,22 +74,42 @@ def _ajouter_etape(document, etape, libelle, statut_etape):
     document.save()
 
 
-def executer_pipeline(document):
+def _corriger_detection_heic(type_mime_reel, contenu_fichier, nom_fichier):
+    if not HEIF_DISPONIBLE:
+        return type_mime_reel
+
+    if type_mime_reel in ('image/heic', 'image/heif'):
+        return type_mime_reel
+
+    ext = nom_fichier.lower()
+    if not ext.endswith(EXTENSIONS_HEIC):
+        return type_mime_reel
+
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(contenu_fichier)) as img:
+            img.verify()
+        return 'image/heic'
+    except Exception:
+        return type_mime_reel
+
+
+def executer_pipeline(document, groupe_attendu=None):
     document.tentative_count += 1
     document.statut = Document.Statut.EN_COURS
     document.log_pipeline = []
     document.save()
 
-    # =========================================================
-    # LECTURE UNIQUE DU FICHIER DEPUIS LE STOCKAGE (MinIO/disque)
-    # =========================================================
     document.fichier.open('rb')
-    contenu_fichier = document.fichier.read()
-    document.fichier.seek(0)
+    try:
+        contenu_fichier = document.fichier.read()
+    finally:
+        document.fichier.close()
 
-    # --- Étape 1 : vérification du format (MIME type réel) ---
+    # --- Étape 1 : vérification du format ---
     _ajouter_etape(document, "format", "Vérification du format", "en_cours")
     type_mime_reel = magic.from_buffer(contenu_fichier, mime=True)
+    type_mime_reel = _corriger_detection_heic(type_mime_reel, contenu_fichier, document.fichier.name)
     document.type_mime = type_mime_reel
 
     if type_mime_reel not in MIME_TYPES_AUTORISES:
@@ -84,29 +118,33 @@ def executer_pipeline(document):
         document.statut = Document.Statut.REJETE
         document.cause_rejet = f"Format non autorisé : {type_mime_reel}"
         document.save()
-        LogAction.objects.create(
-            document=document, type_action=LogAction.TypeAction.REJET,
-            cause=document.cause_rejet,
-        )
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
         return
 
-    document.groupe = determiner_groupe(type_mime_reel)
+    groupe_reel = determiner_groupe(type_mime_reel)
+    if groupe_attendu and groupe_reel != groupe_attendu:
+        document.log_pipeline[-1]["statut"] = "echec"
+        document.log_pipeline[-1]["horodatage"] = _horodatage()
+        document.statut = Document.Statut.REJETE
+        document.cause_rejet = f"Format incorrect pour ce formulaire. Un fichier de type '{groupe_attendu}' était attendu."
+        document.save()
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
+        return
+
+    document.groupe = groupe_reel
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-    # --- Étape 2 : scan antivirus (signature EICAR pour la démo) ---
+    # --- Étape 2 : scan antivirus (test EICAR) ---
     _ajouter_etape(document, "antivirus", "Scan antivirus", "en_cours")
     if SIGNATURE_EICAR in contenu_fichier:
         document.log_pipeline[-1]["statut"] = "echec"
         document.log_pipeline[-1]["horodatage"] = _horodatage()
         document.statut = Document.Statut.REJETE
-        document.cause_rejet = "Virus détecté (signature EICAR)"
+        document.cause_rejet = "Fichier rejeté : signature virale détectée (test EICAR)."
         document.save()
-        LogAction.objects.create(
-            document=document, type_action=LogAction.TypeAction.REJET,
-            cause=document.cause_rejet,
-        )
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
         return
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
@@ -116,17 +154,20 @@ def executer_pipeline(document):
     _ajouter_etape(document, "metadonnees", "Extraction des métadonnées", "en_cours")
     document.taille_fichier = document.fichier.size
 
-    if type_mime_reel in ('image/jpeg', 'image/png'):
-        from PIL import Image
-        with Image.open(io.BytesIO(contenu_fichier)) as img:
-            document.largeur_px, document.hauteur_px = img.size
+    if type_mime_reel.startswith('image/'):
+        try:
+            from PIL import Image
+            with Image.open(io.BytesIO(contenu_fichier)) as img:
+                document.largeur_px, document.hauteur_px = img.size
+        except Exception:
+            pass
 
-    if type_mime_reel in ('video/mp4', 'audio/mpeg'):
+    if type_mime_reel.startswith(('video/', 'audio/')):
         try:
             from mutagen import File as MutagenFile
-            audio = MutagenFile(io.BytesIO(contenu_fichier))
-            if audio and audio.info.length:
-                document.duree = round(audio.info.length, 1)
+            media_info = MutagenFile(io.BytesIO(contenu_fichier))
+            if media_info and hasattr(media_info.info, 'length') and media_info.info.length:
+                document.duree = round(media_info.info.length, 1)
         except Exception:
             pass
 
@@ -134,23 +175,8 @@ def executer_pipeline(document):
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-    # --- Étape 4 : classement automatique ---
-    _ajouter_etape(document, "classement", "Classement automatique", "termine")
-    # Règle simple : affecter une catégorie selon le groupe
-    from .models import Categorie
-    nom_categorie = {
-        'documents': 'Documents',
-        'images': 'Images',
-        'medias': 'Médias',
-    }.get(document.groupe)
-    if nom_categorie:
-        cat, _ = Categorie.objects.get_or_create(nom=nom_categorie)
-        document.categorie = cat
-    document.log_pipeline[-1]["horodatage"] = _horodatage()
-    document.save()
-
-    # --- Étape 5 : tagging automatique ---
-    _ajouter_etape(document, "tagging", "Tagging automatique", "termine")
+    # --- Étape 4 : tagging automatique ---
+    _ajouter_etape(document, "tagging", "Tagging automatique", "en_cours")
     from .models import Tag
     tags_auto = []
     if document.type_source == 'scan':
@@ -162,31 +188,39 @@ def executer_pipeline(document):
         tags_auto.append(t)
     if tags_auto:
         document.tags.add(*tags_auto)
-    document.log_pipeline[-1]["horodatage"] = _horodatage()
-    document.save()
-
-    # --- Étape 6 : indexation du contenu ---
-    _ajouter_etape(document, "indexation", "Indexation du contenu", "en_cours")
-    if type_mime_reel == 'text/plain':
-        document.contenu_texte = contenu_fichier.decode(errors='ignore')
-    elif type_mime_reel == 'application/pdf':
-        try:
-            import PyPDF2
-            reader = PyPDF2.PdfReader(io.BytesIO(contenu_fichier))
-            text = ""
-            for page in reader.pages:
-                text += page.extract_text()
-            document.contenu_texte = text
-        except Exception:
-            pass
+    
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-    # --- Étape 7 : chargement final (stockage validé) ---
-    _ajouter_etape(document, "chargement", "Chargement final (MinIO)", "termine")
+    # ✅ --- Étape 5b : génération de la miniature (PDF uniquement) ---
+    # (CORRIGÉ : Maintenant correctement indenté à l'intérieur de la fonction)
+    _ajouter_etape(document, "miniature", "Génération de la miniature", "en_cours")
+    if type_mime_reel == 'application/pdf':
+        try:
+            import fitz  # PyMuPDF
+            pdf = fitz.open(stream=contenu_fichier, filetype="pdf")
+            premiere_page = pdf[0]
+            pixmap = premiere_page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))
+            image_bytes = pixmap.tobytes("png")
+            nom_miniature = f"miniature_{document.id}.png"
+            document.miniature.save(nom_miniature, ContentFile(image_bytes), save=False)
+            pdf.close()
+        except Exception as e:
+            print(f"⚠️ Échec génération miniature PDF {document.id}: {e}")
+            pass  # Ne bloque pas le document
+
+    document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
+    document.save()
+
+    # --- Étape 6 : chargement final (stockage validé) ---
+    _ajouter_etape(document, "chargement", "Chargement final (MinIO)", "en_cours")
+    document.log_pipeline[-1]["statut"] = "termine"
+    document.log_pipeline[-1]["horodatage"] = _horodatage()
+    document.save()
 
     # --- Fin du pipeline : document validé ---
     document.statut = Document.Statut.VALIDE
     document.save()
+    LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION)

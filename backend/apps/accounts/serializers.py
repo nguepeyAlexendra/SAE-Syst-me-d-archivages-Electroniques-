@@ -1,9 +1,9 @@
 from rest_framework import serializers
-from .models import ConfigurationConnexion
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
-from .models import ProfilUtilisateur
-from .models import DomaineEmail
+
+from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail
+from apps.documents.models import Departement
 
 
 class VerificationEmailSerializer(serializers.Serializer):
@@ -15,6 +15,7 @@ class VerificationEmailSerializer(serializers.Serializer):
         config = ConfigurationConnexion.get_configuration()
         return config.email_est_autorise(email)
     
+
 class LoginSerializer(serializers.Serializer):
     """Reçoit email + mot de passe, vérifie le domaine ET les identifiants."""
     email = serializers.EmailField()
@@ -24,25 +25,38 @@ class LoginSerializer(serializers.Serializer):
         email = self.validated_data['email']
         password = self.validated_data['password']
 
-        # 1. On revérifie la règle de domaine, même si React l'a déjà fait avant
-        #    (sécurité : ne jamais faire confiance uniquement au frontend)
         config = ConfigurationConnexion.get_configuration()
         if not config.email_est_autorise(email):
             return None, "Cet email n'est pas autorisé à se connecter."
 
-        # 2. On cherche l'utilisateur correspondant à cet email
         try:
             utilisateur = User.objects.get(email__iexact=email)
         except User.DoesNotExist:
             return None, "Identifiants incorrects."
 
-        # 3. On vérifie le mot de passe via le système d'authentification de Django
         utilisateur_authentifie = authenticate(username=utilisateur.username, password=password)
         if utilisateur_authentifie is None:
             return None, "Identifiants incorrects."
 
         return utilisateur_authentifie, None
+
+
+# ✅ NOUVEAU : Ce sérialiseur prépare les données de l'utilisateur pour le frontend
+class UserSerializer(serializers.ModelSerializer):
+    est_admin = serializers.BooleanField(source='is_staff', read_only=True)
+    departement = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        # ⚠️ 'departement' est maintenant officiellement dans la réponse JSON
+        fields = ['id', 'username', 'email', 'est_admin', 'departement']
+
+    def get_departement(self, obj):
+        if hasattr(obj, 'profil') and obj.profil.departement:
+            return {"id": obj.profil.departement.id, "nom": obj.profil.departement.nom}
+        return None
     
+
 class ConfigurationConnexionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConfigurationConnexion
@@ -50,9 +64,8 @@ class ConfigurationConnexionSerializer(serializers.ModelSerializer):
         read_only_fields = ['modifie_par', 'derniere_modification']
 
     def validate_domaine_email_autorise(self, value):
-        """Vérifie que chaque domaine (séparé par virgule) commence bien par '@'."""
         if not value.strip():
-            return value  # champ vide = restriction désactivée, autorisé
+            return value
 
         domaines = [d.strip() for d in value.split(',') if d.strip()]
         for domaine in domaines:
@@ -60,13 +73,47 @@ class ConfigurationConnexionSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError(
                     f"Le domaine '{domaine}' doit commencer par '@' (ex: @gmail.com)."
                 )
-        # On renvoie une version "nettoyée" (espaces retirés, virgules normalisées)
         return ','.join(domaines)
         
+
 class ProfilSerializer(serializers.ModelSerializer):
+    departement = serializers.SerializerMethodField()
+    departement_nom = serializers.SerializerMethodField()
+    departements_autorises_noms = serializers.SerializerMethodField()
+    
+    departements_autorises = serializers.PrimaryKeyRelatedField(
+        queryset=Departement.objects.all(), 
+        many=True, 
+        required=False,
+        help_text="Départements supplémentaires auxquels l'utilisateur a accès."
+    )
+
     class Meta:
         model = ProfilUtilisateur
-        fields = ['photo', 'changement_mdp_obligatoire']
+        fields = [
+            'photo', 
+            'changement_mdp_obligatoire', 
+            'departement', 
+            'departement_nom', 
+            'departements_autorises', 
+            'departements_autorises_noms'
+        ]
+
+    def get_departement(self, obj):
+        if obj.departement:
+            return {"id": obj.departement.id, "nom": obj.departement.nom}
+        return None
+
+    def get_departement_nom(self, obj):
+        return obj.departement.nom if obj.departement else None
+
+    def get_departements_autorises_noms(self, obj):
+        return [dept.nom for dept in obj.departements_autorises.all()]
+
+    def validate_departement(self, value):
+        if not value and hasattr(self, 'initial_data') and 'departement' in self.initial_data:
+            raise serializers.ValidationError("Un département principal est requis.")
+        return value
 
 
 class ChangerMotDePasseSerializer(serializers.Serializer):
@@ -78,4 +125,4 @@ class DomaineEmailSerializer(serializers.ModelSerializer):
     class Meta:
         model = DomaineEmail
         fields = ['id', 'domaine', 'actif', 'date_ajout']
-        read_only_fields = ['date_ajout']  
+        read_only_fields = ['date_ajout']

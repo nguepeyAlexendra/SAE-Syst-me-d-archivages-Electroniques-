@@ -13,8 +13,7 @@ from .views import (
     DomaineEmailBulkView,      # ✅ Doit être ici
 )
 
-print("✅ ✅ ✅ LE FICHIER ACCOUNTS/URLS.PY EST BIEN LU PAR DJANGO ✅ ✅ ✅")
-# 1. Création du routeur
+# Routeur DRF
 router = DefaultRouter()
 router.register(r'domaines-email', DomaineEmailViewSet, basename='domaines-email')
 
@@ -32,4 +31,3 @@ urlpatterns = [
 
 # 2. CETTE LIGNE EST OBLIGATOIRE pour ajouter les routes du routeur
 urlpatterns += router.urls
-print("🚨 🚨 🚨 LES ROUTES DU ROUTER ONT ÉTÉ AJOUTÉES AVEC SUCCÈS ! 🚨 🚨 🚨")

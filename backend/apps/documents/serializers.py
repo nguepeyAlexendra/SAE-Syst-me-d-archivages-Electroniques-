@@ -24,17 +24,19 @@ class DocumentSerializer(serializers.ModelSerializer):
     depose_par_nom = serializers.CharField(source='depose_par.username', read_only=True)
     categorie_nom = serializers.CharField(source='categorie.nom', read_only=True, default=None)
     departement_nom = serializers.CharField(source='departement.nom', read_only=True, default=None)
+    departements_autorises_noms = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
         fields = [
-            'id', 'titre', 'fichier', 'type_source',
-            'depose_par', 'depose_par_nom', 'date_depot', 'date_derniere_modification',
+            'id', 'titre', 'fichier', 'miniature',  # ✅ AJOUTÉ : pour exposer l'URL de la miniature au frontend
+            'type_source', 'depose_par', 'depose_par_nom', 'date_depot', 'date_derniere_modification',
             'taille_fichier', 'type_mime', 'groupe', 'auteur_document',
             'largeur_px', 'hauteur_px', 'duree',
             'categorie', 'categorie_nom', 'departement', 'departement_nom', 'tags',
             'contenu_texte', 'statut', 'log_pipeline', 'cause_rejet',
             'est_confidentiel', 'utilisateurs_autorises',
+            'departements_autorises', 'departements_autorises_noms',
             'est_epingle', 'tentative_count', 'favoris',
             'est_supprime', 'date_suppression',
         ]
@@ -42,7 +44,16 @@ class DocumentSerializer(serializers.ModelSerializer):
             'depose_par', 'taille_fichier', 'type_mime', 'groupe', 'contenu_texte',
             'statut', 'log_pipeline', 'cause_rejet', 'largeur_px', 'hauteur_px', 'duree',
             'date_derniere_modification', 'est_supprime', 'date_suppression', 'tentative_count',
+            'miniature',  # ✅ AJOUTÉ : généré automatiquement par le pipeline, pas modifiable par l'user
         ]
+
+    def get_departements_autorises_noms(self, obj):
+        return [d.nom for d in obj.departements_autorises.all()]
+
+    def validate_departement(self, value):
+        if not value:
+            raise serializers.ValidationError("Le département est obligatoire.")
+        return value
 
     def validate_est_confidentiel(self, value):
         request = self.context.get('request')
