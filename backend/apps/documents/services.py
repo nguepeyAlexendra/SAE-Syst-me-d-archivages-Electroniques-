@@ -175,20 +175,39 @@ def executer_pipeline(document, groupe_attendu=None):
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-    # --- Étape 4 : tagging automatique ---
+        # --- Étape 4 : tagging automatique contextuel ---
     _ajouter_etape(document, "tagging", "Tagging automatique", "en_cours")
     from .models import Tag
+    from datetime import datetime
+
     tags_auto = []
-    if document.type_source == 'scan':
-        t, _ = Tag.objects.get_or_create(nom='scanne')
-        tags_auto.append(t)
+
+    # 1. Mois et Année (Toujours ajouté, basé sur la date du jour)
+    mois_annee = datetime.now().strftime('%B %Y').capitalize() # ex: "Juillet 2026"
+    t, _ = Tag.objects.get_or_create(nom=mois_annee, defaults={'couleur': '#8b5cf6'}) # Violet
+    tags_auto.append(t)
+
+    # 2. Format du fichier (Ajouté selon le type MIME réel)
     if document.groupe == 'images':
-        sous_type = type_mime_reel.split('/')[-1].upper()
-        t, _ = Tag.objects.get_or_create(nom=sous_type)
+        sous_type = type_mime_reel.split('/')[-1].upper() # ex: JPEG, PNG
+        t, _ = Tag.objects.get_or_create(nom=sous_type, defaults={'couleur': '#10b981'}) # Vert
         tags_auto.append(t)
+    elif type_mime_reel == 'application/pdf':
+        t, _ = Tag.objects.get_or_create(nom='PDF', defaults={'couleur': '#ef4444'}) # Rouge
+        tags_auto.append(t)
+    elif 'spreadsheet' in type_mime_reel or 'excel' in type_mime_reel:
+        t, _ = Tag.objects.get_or_create(nom='Excel', defaults={'couleur': '#10b981'}) # Vert
+        tags_auto.append(t)
+
+    # 3. Source (Ajouté UNIQUEMENT si c'est un scan)
+    if document.type_source == 'scan':
+        t, _ = Tag.objects.get_or_create(nom='Scanné', defaults={'couleur': '#6b7280'}) # Gris
+        tags_auto.append(t)
+
+    # Ajouter tous les tags automatiques au document
     if tags_auto:
         document.tags.add(*tags_auto)
-    
+
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
@@ -207,7 +226,7 @@ def executer_pipeline(document, groupe_attendu=None):
             document.miniature.save(nom_miniature, ContentFile(image_bytes), save=False)
             pdf.close()
         except Exception as e:
-            print(f"⚠️ Échec génération miniature PDF {document.id}: {e}")
+            print(f"Echec generation miniature PDF {document.id}: {e}")
             pass  # Ne bloque pas le document
 
     document.log_pipeline[-1]["statut"] = "termine"
@@ -223,4 +242,4 @@ def executer_pipeline(document, groupe_attendu=None):
     # --- Fin du pipeline : document validé ---
     document.statut = Document.Statut.VALIDE
     document.save()
-    LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION)
+    LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION, cause="Document validé et indexé avec succès")

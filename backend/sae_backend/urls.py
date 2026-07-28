@@ -8,8 +8,9 @@ from apps.documents.views import (
     DepartementListView, DepartementDetailView, DepartementUserListView,
     DepartementAssignUserView, DepartementGrantAccessView,
     DocumentPermissionsView,
-    TagListView, TagDeleteView, AdminStatsView,
+    TagListView, TagDetailView, AdminStatsView,
 )
+from apps.accounts.views import MotDePasseOublieView, ConfirmerMotDePasseOublieView
 from apps.accounts.views import AdminUserListView, AdminUserToggleActiveView, AdminUserToggleAdminView, AdminUserDepartementsAutorisesView
 
 urlpatterns = [
@@ -27,7 +28,9 @@ urlpatterns = [
     path('api/departements/<int:pk>/assigner/', DepartementAssignUserView.as_view(), name='departements-assigner'),
     path('api/departements/acces/', DepartementGrantAccessView.as_view(), name='departements-acces'),
     path('api/tags/', TagListView.as_view(), name='tags-list'),
-    path('api/tags/<int:pk>/', TagDeleteView.as_view(), name='tags-delete'),
+    path('api/tags/<int:pk>/', TagDetailView.as_view(), name='tags-detail'),
+    path('api/auth/mot-de-passe-oublie/', MotDePasseOublieView.as_view(), name='mot-de-passe-oublie'),
+    path('api/auth/confirmer-mot-de-passe-oublie/', ConfirmerMotDePasseOublieView.as_view(), name='confirmer-mot-de-passe-oublie'),
     path('api/admin/stats/', AdminStatsView.as_view(), name='admin-stats'),
     path('api/admin/configuration/', AdminConfigurationView.as_view(), name='admin-configuration'),
     path('api/admin/utilisateurs/', AdminUserListView.as_view(), name='admin-utilisateurs'),

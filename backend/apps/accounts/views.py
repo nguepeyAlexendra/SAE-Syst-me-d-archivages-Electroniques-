@@ -391,3 +391,60 @@ class DomaineEmailBulkView(APIView):
         
         DomaineEmail.objects.filter(id__in=domaines_ids).update(actif=(action == 'activer'))
         return Response({"succes": f"Domaines {action}s avec succès."})
+
+
+_reset_codes: dict[str, dict] = {}
+
+class MotDePasseOublieView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .serializers import MotDePasseOublieSerializer
+        serializer = MotDePasseOublieSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        import random
+        code = str(random.randint(100000, 999999))
+        _reset_codes[email] = {'code': code, 'expires_at': __import__('datetime').datetime.now() + __import__('datetime').timedelta(minutes=15)}
+        try:
+            send_mail(
+                'Réinitialisation de mot de passe - SAE',
+                f'Utilisez ce code pour réinitialiser votre mot de passe : {code}\n\nCe code expire dans 15 minutes.',
+                settings.DEFAULT_FROM_EMAIL,
+                [email],
+                fail_silently=False,
+            )
+        except Exception:
+            pass
+        return Response({"succes": True, "message": "Si cet email existe, un code de réinitialisation a été envoyé."})
+
+
+class ConfirmerMotDePasseOublieView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        from .serializers import ConfirmerMotDePasseOublieSerializer
+        serializer = ConfirmerMotDePasseOublieSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data['email']
+        code = serializer.validated_data['code']
+        nouveau_mdp = serializer.validated_data['nouveau_mot_de_passe']
+        from django.contrib.auth.password_validation import validate_password
+        try:
+            validate_password(nouveau_mdp)
+        except Exception as e:
+            return Response({"erreur": list(e.messages) if hasattr(e, 'messages') else str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        stocke = _reset_codes.get(email)
+        if not stocke or stocke['code'] != code:
+            return Response({"erreur": "Code invalide."}, status=status.HTTP_400_BAD_REQUEST)
+        if __import__('datetime').datetime.now() > stocke['expires_at']:
+            _reset_codes.pop(email, None)
+            return Response({"erreur": "Code expiré."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            user = User.objects.get(email__iexact=email)
+            user.set_password(nouveau_mdp)
+            user.save()
+        except User.DoesNotExist:
+            return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        _reset_codes.pop(email, None)
+        return Response({"succes": True})

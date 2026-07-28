@@ -42,6 +42,11 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             groupe = self.request.query_params.get('groupe')
             if groupe:
                 qs = qs.filter(groupe=groupe)
+            
+            # ✅ AJOUT : Filtrage par tag (Admin)
+            tag = self.request.query_params.get('tag')
+            if tag:
+                qs = qs.filter(tags__nom__iexact=tag)
 
         else:
             profil = getattr(user, 'profil', None)
@@ -60,6 +65,11 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             if groupe:
                 qs = qs.filter(groupe=groupe)
 
+            # ✅ AJOUT : Filtrage par tag (Utilisateur standard)
+            tag = self.request.query_params.get('tag')
+            if tag:
+                qs = qs.filter(tags__nom__iexact=tag)
+
             statut = self.request.query_params.get('statut')
             if statut:
                 qs = qs.filter(statut=statut)
@@ -74,7 +84,7 @@ class DocumentListCreateView(generics.ListCreateAPIView):
                 | Q(est_confidentiel=True, utilisateurs_autorises=user)
             )
 
-        # Filtrage par date
+        # Filtrage par date (inchangé)
         date_debut = self.request.query_params.get('date_debut')
         date_fin = self.request.query_params.get('date_fin')
         date_precise = self.request.query_params.get('date_precise')
@@ -87,7 +97,7 @@ class DocumentListCreateView(generics.ListCreateAPIView):
             if date_fin:
                 qs = qs.filter(date_depot__date__lte=date_fin)
 
-        # Ordre de tri
+        # Ordre de tri (inchangé)
         ordre_date = self.request.query_params.get('ordre_date')
         ordre_nom = self.request.query_params.get('ordre_nom')
 
@@ -286,7 +296,9 @@ class AdminStatsView(APIView):
         valide = base.filter(statut=Document.Statut.VALIDE).count()
         rejete = base.filter(statut=Document.Statut.REJETE).count()
 
-        par_dept = base.values('departement__nom').annotate(
+        confidentiels = base.filter(est_confidentiel=True).count()
+
+        par_dept = base.values('departement__nom', 'departement__nom_en').annotate(
             total=Count('id'), valide=Count('id', filter=Q(statut='valide')),
             rejete=Count('id', filter=Q(statut='rejete')),
         ).order_by('-total')
@@ -299,18 +311,19 @@ class AdminStatsView(APIView):
             type_action=LogAction.TypeAction.REJET
         ).values('cause').annotate(count=Count('id')).order_by('-count')[:5]
 
-        hebdo = []
-        for i in range(7, -1, -1):
+        jours_activite = int(request.query_params.get('days', 7))
+        activite = []
+        for i in range(jours_activite - 1, -1, -1):
             jour = timezone.now().date() - timedelta(days=i)
             count = base.filter(date_depot__date=jour).count()
-            hebdo.append({"date": jour.isoformat(), "count": count})
+            activite.append({"date": jour.isoformat(), "count": count})
 
         return Response({
-            "total": total, "en_cours": en_cours, "valide": valide, "rejete": rejete,
+            "total": total, "confidentiels": confidentiels, "en_cours": en_cours, "valide": valide, "rejete": rejete,
             "par_departement": list(par_dept),
             "par_categorie": list(par_categorie),
             "top_causes_rejet": list(top_rejet),
-            "activite_hebdo": hebdo,
+            "activite_hebdo": activite,
         })
 
 
@@ -529,7 +542,7 @@ class TagListView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
 
 
-class TagDeleteView(generics.DestroyAPIView):
+class TagDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Tag.objects.all()
     serializer_class = TagSerializer
     permission_classes = [permissions.IsAdminUser]

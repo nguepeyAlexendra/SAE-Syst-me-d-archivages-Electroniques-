@@ -79,6 +79,7 @@ class ConfigurationConnexionSerializer(serializers.ModelSerializer):
 class ProfilSerializer(serializers.ModelSerializer):
     departement = serializers.SerializerMethodField()
     departement_nom = serializers.SerializerMethodField()
+    departement_nom_en = serializers.SerializerMethodField()
     departements_autorises_noms = serializers.SerializerMethodField()
     
     departements_autorises = serializers.PrimaryKeyRelatedField(
@@ -94,21 +95,25 @@ class ProfilSerializer(serializers.ModelSerializer):
             'photo', 
             'changement_mdp_obligatoire', 
             'departement', 
-            'departement_nom', 
+            'departement_nom',
+            'departement_nom_en',
             'departements_autorises', 
             'departements_autorises_noms'
         ]
 
     def get_departement(self, obj):
         if obj.departement:
-            return {"id": obj.departement.id, "nom": obj.departement.nom}
+            return {"id": obj.departement.id, "nom": obj.departement.nom, "nom_en": obj.departement.nom_en}
         return None
 
     def get_departement_nom(self, obj):
         return obj.departement.nom if obj.departement else None
 
+    def get_departement_nom_en(self, obj):
+        return obj.departement.nom_en if obj.departement else None
+
     def get_departements_autorises_noms(self, obj):
-        return [dept.nom for dept in obj.departements_autorises.all()]
+        return [{"id": dept.id, "nom": dept.nom, "nom_en": dept.nom_en} for dept in obj.departements_autorises.all()]
 
     def validate_departement(self, value):
         if not value and hasattr(self, 'initial_data') and 'departement' in self.initial_data:
@@ -119,6 +124,23 @@ class ProfilSerializer(serializers.ModelSerializer):
 class ChangerMotDePasseSerializer(serializers.Serializer):
     ancien_mot_de_passe = serializers.CharField(write_only=True)
     nouveau_mot_de_passe = serializers.CharField(write_only=True, min_length=8)    
+
+
+class MotDePasseOublieSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        try:
+            User.objects.get(email__iexact=value)
+        except User.DoesNotExist:
+            raise serializers.ValidationError("Aucun compte trouvé avec cet email.")
+        return value.lower()
+
+
+class ConfirmerMotDePasseOublieSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    code = serializers.CharField(max_length=6)
+    nouveau_mot_de_passe = serializers.CharField(write_only=True, min_length=8)
 
 
 class DomaineEmailSerializer(serializers.ModelSerializer):

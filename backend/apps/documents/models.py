@@ -16,6 +16,7 @@ class Categorie(models.Model):
 
 class Departement(models.Model):
     nom = models.CharField(max_length=100, unique=True)
+    nom_en = models.CharField(max_length=100, blank=True, default='')
     description = models.TextField(blank=True)
 
     def __str__(self):
