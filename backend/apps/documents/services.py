@@ -182,11 +182,8 @@ def executer_pipeline(document, groupe_attendu=None):
 
     tags_auto = []
 
-    # 1. Mois et Année (Toujours ajouté, basé sur la date du jour)
-    mois_annee = datetime.now().strftime('%B %Y').capitalize() # ex: "Juillet 2026"
-    t, _ = Tag.objects.get_or_create(nom=mois_annee, defaults={'couleur': '#8b5cf6'}) # Violet
-    tags_auto.append(t)
-
+   
+   
     # 2. Format du fichier (Ajouté selon le type MIME réel)
     if document.groupe == 'images':
         sous_type = type_mime_reel.split('/')[-1].upper() # ex: JPEG, PNG

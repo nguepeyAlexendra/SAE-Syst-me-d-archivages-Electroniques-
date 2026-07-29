@@ -12,7 +12,7 @@ from rest_framework.permissions import IsAuthenticated, IsAdminUser
 from django.db.models import Count, Q
 from django.utils import timezone
 
-from .models import Document, Categorie, Departement, Tag, LogAction, ConnexionLog
+from .models import Document, Categorie, Departement, Tag, LogAction, ConnexionLog, StorageSnapshot
 from apps.accounts.models import ProfilUtilisateur
 from .serializers import (
     DocumentSerializer, CategorieSerializer, DepartementSerializer,
@@ -264,11 +264,42 @@ class ServerStatsView(APIView):
         uptime_str = f"{int(days)}j {int(hours)}h {int(minutes)}m"
 
         mem = psutil.virtual_memory()
-        cpu_percent = psutil.cpu_percent(interval=0.5)
+        cpu_percent = psutil.cpu_percent(interval=1)
 
         connexions_recentes = ConnexionLog.objects.filter(
             date_connexion__gte=timezone.now() - timedelta(hours=24)
         ).count()
+
+        disk_total = round(psutil.disk_usage('/').total / (1024**3), 2)
+        disk_used = round(psutil.disk_usage('/').used / (1024**3), 2)
+        disk_percent = psutil.disk_usage('/').percent
+
+        today = timezone.now().date()
+        defaults = {'disk_used_gb': disk_used, 'disk_total_gb': disk_total}
+
+        try:
+            minio_client = Minio(
+                settings.MINIO_ENDPOINT,
+                access_key=settings.MINIO_ACCESS_KEY,
+                secret_key=settings.MINIO_SECRET_KEY,
+                secure=False
+            )
+            buckets = minio_client.list_buckets()
+            total_size = 0
+            for bucket in buckets:
+                for obj in minio_client.list_objects(bucket.name, recursive=True):
+                    total_size += obj.size if obj.size else 0
+            defaults['minio_used_gb'] = round(total_size / (1024 ** 3), 2)
+        except Exception:
+            pass
+
+        StorageSnapshot.objects.update_or_create(date=today, defaults=defaults)
+
+        storage_history = list(
+            StorageSnapshot.objects.filter(date__gte=today - timedelta(days=30))
+            .values('date', 'disk_used_gb', 'disk_total_gb', 'minio_used_gb')
+            .order_by('date')
+        )
 
         return Response({
             "platform": platform.platform(),
@@ -279,10 +310,11 @@ class ServerStatsView(APIView):
             "memory_total": round(mem.total / (1024**3), 2),
             "memory_used": round(mem.used / (1024**3), 2),
             "memory_percent": mem.percent,
-            "disk_total": round(psutil.disk_usage('/').total / (1024**3), 2),
-            "disk_used": round(psutil.disk_usage('/').used / (1024**3), 2),
-            "disk_percent": psutil.disk_usage('/').percent,
+            "disk_total": disk_total,
+            "disk_used": disk_used,
+            "disk_percent": disk_percent,
             "connexions_24h": connexions_recentes,
+            "storage_history": storage_history,
         })
 
 
@@ -312,9 +344,22 @@ class AdminStatsView(APIView):
         ).values('cause').annotate(count=Count('id')).order_by('-count')[:5]
 
         jours_activite = int(request.query_params.get('days', 7))
+        date_debut_act = request.query_params.get('date_debut_activite')
+        date_fin_act = request.query_params.get('date_fin_activite')
+
+        if date_debut_act and date_fin_act:
+            debut = datetime.strptime(date_debut_act, '%Y-%m-%d').date()
+            fin = datetime.strptime(date_fin_act, '%Y-%m-%d').date()
+            if fin < debut:
+                debut, fin = fin, debut
+            plage = (fin - debut).days + 1
+            jours_activite = max(plage, 1)
+            dates = [debut + timedelta(days=i) for i in range(jours_activite)]
+        else:
+            dates = [timezone.now().date() - timedelta(days=i) for i in range(jours_activite - 1, -1, -1)]
+
         activite = []
-        for i in range(jours_activite - 1, -1, -1):
-            jour = timezone.now().date() - timedelta(days=i)
+        for jour in dates:
             count = base.filter(date_depot__date=jour).count()
             activite.append({"date": jour.isoformat(), "count": count})
 

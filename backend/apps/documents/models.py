@@ -138,3 +138,15 @@ class ConnexionLog(models.Model):
     class Meta:
         ordering = ['-date_connexion']
         verbose_name = "Log de connexion"
+
+
+class StorageSnapshot(models.Model):
+    date = models.DateField(auto_now_add=True)
+    disk_used_gb = models.FloatField()
+    disk_total_gb = models.FloatField()
+    minio_used_gb = models.FloatField(default=0)
+
+    class Meta:
+        ordering = ['-date']
+        verbose_name = "Snapshot stockage"
+        verbose_name_plural = "Snapshots stockage"
