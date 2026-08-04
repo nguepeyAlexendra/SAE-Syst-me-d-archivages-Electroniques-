@@ -89,14 +89,18 @@ class Document(models.Model):
         'Departement', blank=True, related_name='documents_autorises',
         help_text="Départements supplémentaires autorisés à voir ce document"
     )
-
     est_epingle = models.BooleanField(default=False)
     tentative_count = models.PositiveIntegerField(default=0)
+    
+    # ✅ NOUVEAU : Champ pour l'archivage
+    est_archive = models.BooleanField(
+        default=False,
+        help_text="Indique si le document a été archivé par un administrateur."
+    )
 
     favoris = models.ManyToManyField(
         User, blank=True, related_name='documents_favoris'
     )
-
     est_supprime = models.BooleanField(default=False)
     date_suppression = models.DateTimeField(null=True, blank=True)
 
@@ -110,7 +114,7 @@ class Document(models.Model):
 
 class LogAction(models.Model):
     class TypeAction(models.TextChoices):
-        SUPPRESSION = 'suppression', 'Suppression'
+        ARCHIVAGE = 'archivage', 'Archivage'
         REJET = 'rejet', 'Rejet ETL'
         VALIDATION = 'validation', 'Validation ETL'
         MODIFICATION = 'modification', 'Modification'

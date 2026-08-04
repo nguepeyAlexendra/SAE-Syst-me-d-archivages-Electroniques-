@@ -1,10 +1,12 @@
 import secrets
 import string
+from datetime import timedelta
 
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.mail import send_mail
 from django.db.models import Q
+from django.utils import timezone
 
 from rest_framework import generics, parsers, permissions, status, viewsets, filters
 from rest_framework.authtoken.models import Token
@@ -15,7 +17,7 @@ from rest_framework.views import APIView
 
 from apps.documents.models import ConnexionLog
 
-from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail, Departement
+from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail, Departement, AppareilApprouve
 from .serializers import (
     ChangerMotDePasseSerializer,
     ConfigurationConnexionSerializer,
@@ -93,6 +95,7 @@ EMAIL_HTML_TEMPLATE = """
 
 class VerifierEmailView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = VerificationEmailSerializer(data=request.data)
@@ -103,6 +106,7 @@ class VerifierEmailView(APIView):
 
 class LoginView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -112,6 +116,123 @@ class LoginView(APIView):
         if erreur:
             return Response({"erreur": erreur}, status=status.HTTP_401_UNAUTHORIZED)
 
+        # ==========================================
+        # DÉCISION : LE 2FA EST-IL REQUIS ?
+        # ==========================================
+        profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=utilisateur)
+        config = ConfigurationConnexion.get_configuration()
+        
+        deux_fa_requis = False
+        
+        # Règle 1 : Les admins ont TOUJOURS le 2FA
+        if utilisateur.is_staff:
+            deux_fa_requis = True
+        # Règle 2 : L'admin a imposé le 2FA à tout le monde
+        elif config.two_fa_obligatoire:
+            deux_fa_requis = True
+        # Règle 3 : L'utilisateur a activé le 2FA lui-même
+        elif profil.two_fa_active:
+            deux_fa_requis = True
+        
+        # ==========================================
+        # SI LE 2FA EST REQUIS
+        # ==========================================
+        if deux_fa_requis:
+            # Vérifier si cet appareil est approuvé (Se souvenir de moi)
+            trusted_device_token = request.data.get('trusted_device_token')
+            if trusted_device_token:
+                try:
+                    appareil = AppareilApprouve.objects.get(
+                        token=trusted_device_token, 
+                        utilisateur=utilisateur
+                    )
+                    if appareil.est_valide():
+                        # Appareil approuvé → connexion directe sans 2FA
+                        token, _ = Token.objects.get_or_create(user=utilisateur)
+                        
+                        try:
+                            ip = request.META.get('REMOTE_ADDR', '')
+                            ua = request.META.get('HTTP_USER_AGENT', '')
+                            ConnexionLog.objects.create(utilisateur=utilisateur, ip_address=ip, user_agent=ua)
+                        except Exception:
+                            pass
+
+                        changement_mdp_obligatoire = profil.changement_mdp_obligatoire
+                        photo_url = profil.photo.url if profil.photo else None
+                        departement_data = None
+                        if profil.departement:
+                            departement_data = {"id": profil.departement.id, "nom": profil.departement.nom}
+
+                        return Response({
+                            "token": token.key,
+                            "changement_mdp_obligatoire": changement_mdp_obligatoire,
+                            "utilisateur": {
+                                "id": utilisateur.id,
+                                "username": utilisateur.username,
+                                "email": utilisateur.email,
+                                "est_admin": utilisateur.is_staff,
+                                "photo": photo_url,
+                                "departement": departement_data,
+                            }
+                        }, status=status.HTTP_200_OK)
+                    else:
+                        appareil.delete()
+                except AppareilApprouve.DoesNotExist:
+                    pass
+
+            # Rate Limiting (max 3 codes par heure)
+            if profil.date_derniere_demande_code:
+                temps_ecoule = timezone.now() - profil.date_derniere_demande_code
+                if temps_ecoule < timedelta(hours=1):
+                    if profil.nb_codes_envoyes_heure >= 3:
+                        return Response({
+                            "erreur": "Trop de codes demandés. Veuillez réessayer dans une heure."
+                        }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                    profil.nb_codes_envoyes_heure += 1
+                else:
+                    profil.nb_codes_envoyes_heure = 1
+            else:
+                profil.nb_codes_envoyes_heure = 1
+            
+            profil.date_derniere_demande_code = timezone.now()
+
+            # Générer le code et le token temporaire
+            code = str(secrets.randbelow(1000000)).zfill(6)
+            temp_token = secrets.token_urlsafe(32)
+            
+            # Sauvegarder en base
+            profil.code_2fa = code
+            profil.code_2fa_expiration = timezone.now() + timedelta(minutes=5)
+            profil.token_2fa_temporaire = temp_token
+            profil.tentatives_2fa_echouees = 0
+            profil.save()
+
+            # Afficher dans le terminal pour les tests
+            print("\n" + "="*60)
+            print(f"🔐 [CODE 2FA] Pour {utilisateur.email} : {code}")
+            print("="*60 + "\n")
+
+            # Envoyer par email
+            try:
+                send_mail(
+                    'Code de vérification SAE',
+                    f"Votre code de connexion est : {code}. Il expire dans 5 minutes.",
+                    settings.DEFAULT_FROM_EMAIL,
+                    [utilisateur.email],
+                    fail_silently=True,
+                )
+            except Exception:
+                pass
+
+            # Renvoyer le token temporaire au frontend
+            return Response({
+                "status": "2fa_required",
+                "temp_token": temp_token,
+            }, status=status.HTTP_200_OK)
+
+        # ==========================================
+        # CONNEXION CLASSIQUE (sans 2FA)
+        # ==========================================
         token, _ = Token.objects.get_or_create(user=utilisateur)
 
         try:
@@ -126,7 +247,6 @@ class LoginView(APIView):
         departement_data = None
 
         try:
-            profil = utilisateur.profil
             changement_mdp_obligatoire = profil.changement_mdp_obligatoire
             if profil.photo:
                 photo_url = profil.photo.url
@@ -147,29 +267,153 @@ class LoginView(APIView):
                 "departement": departement_data,
             }
         }, status=status.HTTP_200_OK)
-    
+
+
+class Verify2FAView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        temp_token = request.data.get('temp_token')
+        code = request.data.get('code')
+        se_souvenir_appareil = request.data.get('se_souvenir_appareil', False)
+
+        if not temp_token or not code:
+            return Response({"erreur": "Token temporaire et code requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profil = ProfilUtilisateur.objects.get(token_2fa_temporaire=temp_token)
+        except ProfilUtilisateur.DoesNotExist:
+            return Response({"erreur": "Session de vérification invalide ou expirée."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # VÉRIFICATION 1 : Le compte est-il déjà bloqué ?
+        if profil.tentatives_2fa_echouees >= 3:
+            profil.code_2fa = None
+            profil.code_2fa_expiration = None
+            profil.token_2fa_temporaire = None
+            profil.tentatives_2fa_echouees = 0
+            profil.save()
+            return Response({
+                "erreur": "Trop de tentatives échouées. Veuillez vous reconnecter depuis le début."
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # VÉRIFICATION 2 : Le code est-il expiré ?
+        if timezone.now() > profil.code_2fa_expiration:
+            profil.code_2fa = None
+            profil.code_2fa_expiration = None
+            profil.token_2fa_temporaire = None
+            profil.tentatives_2fa_echouees = 0
+            profil.save()
+            return Response({"erreur": "Le code a expiré. Veuillez vous reconnecter."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # VÉRIFICATION 3 : Le code est-il incorrect ?
+        if profil.code_2fa != code:
+            profil.tentatives_2fa_echouees += 1
+            profil.save()
+            
+            tentatives_restantes = 3 - profil.tentatives_2fa_echouees
+            if tentatives_restantes > 0:
+                return Response({
+                    "erreur": f"Code incorrect. Il vous reste {tentatives_restantes} tentative(s)."
+                }, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                profil.code_2fa = None
+                profil.code_2fa_expiration = None
+                profil.token_2fa_temporaire = None
+                profil.tentatives_2fa_echouees = 0
+                profil.save()
+                return Response({
+                    "erreur": "Trop de tentatives échouées. Veuillez vous reconnecter depuis le début."
+                }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # ==========================================
+        # SUCCÈS : GÉNÉRATION DU VRAI TOKEN
+        # ==========================================
+        utilisateur = profil.utilisateur
+        
+        # Nettoyage complet
+        profil.code_2fa = None
+        profil.code_2fa_expiration = None
+        profil.token_2fa_temporaire = None
+        profil.tentatives_2fa_echouees = 0
+        profil.save()
+
+        # Création du token final
+        token, _ = Token.objects.get_or_create(user=utilisateur)
+
+        # Si "Se souvenir de cet appareil" est coché
+        trusted_device_token = None
+        if se_souvenir_appareil:
+            trusted_device_token = secrets.token_urlsafe(48)
+            nom_appareil = request.META.get('HTTP_USER_AGENT', 'Appareil inconnu')[:255]
+            AppareilApprouve.objects.create(
+                utilisateur=utilisateur,
+                token=trusted_device_token,
+                nom_appareil=nom_appareil,
+                date_expiration=timezone.now() + timedelta(days=30)
+            )
+
+        # Log de connexion
+        try:
+            ip = request.META.get('REMOTE_ADDR', '')
+            ua = request.META.get('HTTP_USER_AGENT', '')
+            ConnexionLog.objects.create(utilisateur=utilisateur, ip_address=ip, user_agent=ua)
+        except Exception:
+            pass
+
+        # Préparation des données utilisateur
+        changement_mdp_obligatoire = profil.changement_mdp_obligatoire
+        photo_url = profil.photo.url if profil.photo else None
+        departement_data = None
+        if profil.departement:
+            departement_data = {"id": profil.departement.id, "nom": profil.departement.nom}
+
+        response_data = {
+            "token": token.key,
+            "changement_mdp_obligatoire": changement_mdp_obligatoire,
+            "utilisateur": {
+                "id": utilisateur.id,
+                "username": utilisateur.username,
+                "email": utilisateur.email,
+                "est_admin": utilisateur.is_staff,
+                "photo": photo_url,
+                "departement": departement_data,
+            }
+        }
+
+        # Ajouter le token de l'appareil approuvé si demandé
+        if trusted_device_token:
+            response_data["trusted_device_token"] = trusted_device_token
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
 
 class ConfigurationConnexionView(generics.RetrieveUpdateAPIView):
     serializer_class = ConfigurationConnexionSerializer
-    permission_classes = [IsAdminUser]
 
     def get_object(self):
         return ConfigurationConnexion.get_configuration()
 
+    # ✅ Permissions dynamiques : lecture pour tous, écriture pour admin uniquement
+    def get_permissions(self):
+        if self.request.method in ['GET', 'HEAD', 'OPTIONS']:
+            return [permissions.IsAuthenticated()]
+        return [IsAdminUser()]
+
     def perform_update(self, serializer):
         serializer.save(modifie_par=self.request.user)
 
-
+        
 class ProfilView(generics.RetrieveUpdateAPIView):
     serializer_class = ProfilSerializer
     permission_classes = [permissions.IsAuthenticated]
-    parser_classes = [parsers.MultiPartParser, parsers.FormParser]
+    # ✅ AJOUT de JSONParser pour accepter les requêtes JSON (comme le toggle 2FA)
+    parser_classes = [parsers.JSONParser, parsers.MultiPartParser, parsers.FormParser]
 
     def get_object(self):
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=self.request.user)
         return profil
-
-
+    
 class ChangerMotDePasseView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -397,6 +641,7 @@ _reset_codes: dict[str, dict] = {}
 
 class MotDePasseOublieView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         from .serializers import MotDePasseOublieSerializer
@@ -421,6 +666,7 @@ class MotDePasseOublieView(APIView):
 
 class ConfirmerMotDePasseOublieView(APIView):
     permission_classes = [AllowAny]
+    authentication_classes = []
 
     def post(self, request):
         from .serializers import ConfirmerMotDePasseOublieSerializer

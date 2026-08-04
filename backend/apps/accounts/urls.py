@@ -3,14 +3,15 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     VerifierEmailView, 
     LoginView, 
+    Verify2FAView,          # ← AJOUTÉ
     ConfigurationConnexionView, 
     ProfilView, 
     ChangerMotDePasseView,
     AdminUserListView,
     AdminUserToggleActiveView,
     AdminUserToggleAdminView,
-    DomaineEmailViewSet,       # ✅ Doit être ici
-    DomaineEmailBulkView,      # ✅ Doit être ici
+    DomaineEmailViewSet,
+    DomaineEmailBulkView,
 )
 
 # Routeur DRF
@@ -20,6 +21,7 @@ router.register(r'domaines-email', DomaineEmailViewSet, basename='domaines-email
 urlpatterns = [
     path('verifier-email/', VerifierEmailView.as_view(), name='verifier-email'),
     path('connexion/', LoginView.as_view(), name='connexion'),
+    path('verify-2fa/', Verify2FAView.as_view(), name='verify-2fa'),  # ← AJOUTÉ
     path('configuration/', ConfigurationConnexionView.as_view(), name='configuration-connexion'),
     path('profil/', ProfilView.as_view(), name='profil'),
     path('changer-mot-de-passe/', ChangerMotDePasseView.as_view(), name='changer-mot-de-passe'),
@@ -29,5 +31,4 @@ urlpatterns = [
     path('domaines-email-bulk/', DomaineEmailBulkView.as_view(), name='domaines-email-bulk'),
 ]
 
-# 2. CETTE LIGNE EST OBLIGATOIRE pour ajouter les routes du routeur
 urlpatterns += router.urls

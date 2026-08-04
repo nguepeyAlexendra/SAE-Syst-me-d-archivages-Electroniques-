@@ -2,6 +2,7 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.db.models.signals import post_save
 from django.dispatch import receiver
+from django.utils import timezone
 from apps.documents.models import Departement
 
 
@@ -21,7 +22,7 @@ class DomaineEmail(models.Model):
     class Meta:
         verbose_name = "Domaine email autorisé"
         verbose_name_plural = "Domaines emails autorisés"
-        ordering = ['-actif', 'domaine']  # Les domaines actifs apparaissent en premier
+        ordering = ['-actif', 'domaine']
 
     def __str__(self):
         statut = "✓" if self.actif else "✗"
@@ -33,13 +34,20 @@ class ConfigurationConnexion(models.Model):
     Paramètres de connexion configurables par l'administrateur.
     Modèle "singleton" : une seule ligne doit exister en base (pk=1).
     """
-    # On garde le champ pour la rétrocompatibilité, mais la logique utilisera le nouveau modèle
     domaine_email_autorise = models.CharField(
         max_length=255,
         blank=True,
         default='@dta-alliance.com,@gmail.com',
         help_text="Obsolète : Utilisez la gestion des domaines ci-dessous."
     )
+
+        
+    # ✅ NOUVEAU : Toggle global pour imposer le 2FA à tous les utilisateurs
+    two_fa_obligatoire = models.BooleanField(
+        default=False,
+        help_text="Si True, tous les utilisateurs devront utiliser la double authentification à la connexion."
+    ) 
+
     modifie_par = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL,
         help_text="Dernier administrateur ayant modifié cette configuration"
@@ -56,16 +64,10 @@ class ConfigurationConnexion(models.Model):
         return config
 
     def email_est_autorise(self, email):
-        """
-        Vérifie si un email respecte la règle de domaine en utilisant le nouveau modèle.
-        """
+        """Vérifie si un email respecte la règle de domaine."""
         if '@' not in email:
             return False
-        
-        # On extrait le domaine de l'email (ex: "test@gmail.com" -> "gmail.com")
         email_domain = email.split('@')[1].lower().strip()
-        
-        # On vérifie s'il existe un domaine actif correspondant dans la nouvelle table
         return DomaineEmail.objects.filter(domaine__iexact=email_domain, actif=True).exists()
 
     def __str__(self):
@@ -80,23 +82,41 @@ def chemin_photo(instance, filename):
     ext = filename.rsplit('.', 1)[-1] if '.' in filename else 'jpg'
     return f'profils/{instance.utilisateur.id}/photo.{ext}'
 
-from django.db import models
-from django.contrib.auth.models import User
-from django.db.models.signals import post_save
-from django.dispatch import receiver
-from apps.documents.models import Departement
-
-# ... (Garde les classes DomaineEmail et ConfigurationConnexion telles quelles) ...
 
 class ProfilUtilisateur(models.Model):
     utilisateur = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profil')
     photo = models.ImageField(upload_to=chemin_photo, null=True, blank=True)
+    telephone = models.CharField(
+        max_length=30,
+        blank=True,
+        default='',
+        help_text="Numéro de téléphone (optionnel)."
+    )
+
+    # ✅ NOUVEAU : L'utilisateur peut activer le 2FA lui-même
+    two_fa_active = models.BooleanField(
+        default=False,
+        help_text="Si True, l'utilisateur a activé la double authentification pour son compte."
+    )
+    
     changement_mdp_obligatoire = models.BooleanField(
         default=True,
         help_text="Si True, l'utilisateur doit changer son mot de passe à la prochaine connexion."
     )
     
-    # 1. DÉPARTEMENT PRINCIPAL : optionnel (les admins peuvent ne pas en avoir)
+    # ==========================================
+    # CHAMPS 2FA (Double Authentification)
+    # ==========================================
+    code_2fa = models.CharField(max_length=6, blank=True, null=True)
+    code_2fa_expiration = models.DateTimeField(blank=True, null=True)
+    token_2fa_temporaire = models.CharField(max_length=64, blank=True, null=True)
+    tentatives_2fa_echouees = models.IntegerField(default=0)
+    
+    # Rate Limiting (max 3 codes par heure)
+    date_derniere_demande_code = models.DateTimeField(blank=True, null=True)
+    nb_codes_envoyes_heure = models.IntegerField(default=0)
+    
+    # 1. DÉPARTEMENT PRINCIPAL
     departement = models.ForeignKey(
         Departement, 
         on_delete=models.PROTECT,
@@ -106,10 +126,10 @@ class ProfilUtilisateur(models.Model):
         help_text="Département principal de l'utilisateur (optionnel pour les admins)."
     )
 
-    # 2. NOUVEAU : DÉPARTEMENTS SUPPLÉMENTAIRES AUTORISÉS
+    # 2. DÉPARTEMENTS SUPPLÉMENTAIRES AUTORISÉS
     departements_autorises = models.ManyToManyField(
         Departement, 
-        blank=True, # Optionnel : un utilisateur peut n'avoir que son département principal
+        blank=True,
         related_name='acces_externe',
         help_text="Départements supplémentaires auxquels l'admin a donné accès à cet utilisateur."
     )
@@ -117,6 +137,31 @@ class ProfilUtilisateur(models.Model):
     def __str__(self):
         dept = self.departement.nom if self.departement else 'Aucun département'
         return f"Profil de {self.utilisateur.username} ({dept})"
+
+
+# ==========================================
+# NOUVEAU MODÈLE : Appareils approuvés
+# ==========================================
+class AppareilApprouve(models.Model):
+    """
+    Stocke les appareils auxquels l'utilisateur a fait confiance.
+    Permet d'éviter le 2FA pendant 30 jours sur un même appareil.
+    """
+    utilisateur = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name='appareils_approuves'
+    )
+    token = models.CharField(max_length=64, unique=True, db_index=True)
+    nom_appareil = models.CharField(max_length=255, blank=True, default='')
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_expiration = models.DateTimeField()
+
+    def est_valide(self):
+        return timezone.now() < self.date_expiration
+
+    def __str__(self):
+        return f"Appareil approuvé pour {self.utilisateur.username}"
 
 
 @receiver(post_save, sender=User)

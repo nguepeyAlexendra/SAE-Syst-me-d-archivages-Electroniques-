@@ -27,6 +27,7 @@ class DocumentSerializer(serializers.ModelSerializer):
     departement_nom = serializers.CharField(source='departement.nom', read_only=True, default=None)
     departement_nom_en = serializers.CharField(source='departement.nom_en', read_only=True, default=None)
     departements_autorises_noms = serializers.SerializerMethodField()
+    est_departement_origine = serializers.SerializerMethodField()
     
     # ✅ Champ d'entrée RENOMMÉ pour éviter le conflit avec le ManyToMany 'tags' du modèle
     tags_input = serializers.CharField(required=False, write_only=True)
@@ -48,6 +49,8 @@ class DocumentSerializer(serializers.ModelSerializer):
             'departements_autorises', 'departements_autorises_noms',
             'est_epingle', 'tentative_count', 'favoris',
             'est_supprime', 'date_suppression',
+            'est_departement_origine',
+            'est_archive', 
         ]
         read_only_fields = [
             'depose_par', 'taille_fichier', 'type_mime', 'groupe', 'contenu_texte',
@@ -58,6 +61,14 @@ class DocumentSerializer(serializers.ModelSerializer):
 
     def get_departements_autorises_noms(self, obj):
         return [d.nom for d in obj.departements_autorises.all()]
+
+    def get_est_departement_origine(self, obj):
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            profil = getattr(request.user, 'profil', None)
+            if profil and profil.departement_id:
+                return obj.departement_id == profil.departement_id
+        return True
 
     def validate_departement(self, value):
         if not value:

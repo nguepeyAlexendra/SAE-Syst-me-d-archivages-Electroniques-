@@ -33,7 +33,11 @@ class DocumentListCreateView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        qs = Document.objects.filter(est_supprime=False).exclude(statut='rejete')
+        est_archive = self.request.query_params.get('est_archive') == 'true'
+        if est_archive:
+            qs = Document.objects.filter(est_supprime=True)
+        else:
+            qs = Document.objects.filter(est_supprime=False).exclude(statut='rejete')
 
         if user.is_staff:
             dept_param = self.request.query_params.get('departement')
@@ -192,10 +196,10 @@ class DocumentToggleFavoriView(APIView):
             return Response({"favori": True})
 
 
-class DocumentDeleteView(APIView):
+class DocumentArchiverView(APIView):
     permission_classes = [permissions.IsAdminUser]
 
-    def delete(self, request, pk):
+    def post(self, request, pk):
         doc = Document.objects.filter(pk=pk, est_supprime=False).first()
         if not doc:
             return Response({"erreur": "Document introuvable."}, status=404)
@@ -205,11 +209,25 @@ class DocumentDeleteView(APIView):
         doc.save()
 
         LogAction.objects.create(
-            document=doc, type_action=LogAction.TypeAction.SUPPRESSION,
-            cause=f"Supprimé par {request.user.username}",
+            document=doc, type_action=LogAction.TypeAction.ARCHIVAGE,
+            cause=f"Archivé par {request.user.username}",
             effectue_par=request.user,
         )
-        return Response({"succes": True, "message": f"Document '{titre}' supprimé."})
+        return Response({"succes": True, "message": f"Document '{titre}' archivé."})
+
+
+class DocumentDesarchiverView(APIView):
+    permission_classes = [permissions.IsAdminUser]
+
+    def post(self, request, pk):
+        doc = Document.objects.filter(pk=pk, est_supprime=True).first()
+        if not doc:
+            return Response({"erreur": "Document introuvable dans les archives."}, status=404)
+        titre = doc.titre
+        doc.est_supprime = False
+        doc.date_suppression = None
+        doc.save()
+        return Response({"succes": True, "message": f"Document '{titre}' désarchivé."})
 
 
 class LogActionListView(generics.ListAPIView):
@@ -289,7 +307,7 @@ class ServerStatsView(APIView):
             for bucket in buckets:
                 for obj in minio_client.list_objects(bucket.name, recursive=True):
                     total_size += obj.size if obj.size else 0
-            defaults['minio_used_gb'] = round(total_size / (1024 ** 3), 2)
+            defaults['minio_used_gb'] = round(total_size / (1024 ** 3), 6)
         except Exception:
             pass
 
@@ -477,9 +495,31 @@ class DepartementAssignUserView(APIView):
 
         return Response({"erreur": "Action invalide."}, status=400)
 
-
 class DepartementGrantAccessView(APIView):
     permission_classes = [permissions.IsAdminUser]
+
+    # ✅ MÉTHODE GET : Liste tous les accès inter-départements accordés
+    def get(self, request):
+        """Liste tous les accès inter-départements accordés"""
+        profils = ProfilUtilisateur.objects.filter(
+            departements_autorises__isnull=False
+        ).select_related('utilisateur', 'departement').prefetch_related('departements_autorises').distinct()
+        
+        result = []
+        for profil in profils:
+            for dept_autorise in profil.departements_autorises.all():
+                result.append({
+                    'id': f"{profil.utilisateur.id}-{dept_autorise.id}",
+                    'utilisateur_id': profil.utilisateur.id,
+                    'username': profil.utilisateur.username,
+                    'email': profil.utilisateur.email,
+                    'departement_source_id': dept_autorise.id,
+                    'departement_source_nom': dept_autorise.nom,
+                    'departement_utilisateur_id': profil.departement.id if profil.departement else None,
+                    'departement_utilisateur_nom': profil.departement.nom if profil.departement else None,
+                })
+        
+        return Response(result)
 
     def post(self, request):
         source_dept_id = request.data.get('source_departement_id')
@@ -508,12 +548,18 @@ class DepartementGrantAccessView(APIView):
             "utilisateurs_affectes": count,
         })
 
+    # ✅ MÉTHODE DELETE : Révoque les accès (ELLE MANQUAIT !)
     def delete(self, request):
         source_dept_id = request.data.get('source_departement_id')
         target_dept_ids = request.data.get('target_departement_ids', [])
 
         if not source_dept_id or not target_dept_ids:
             return Response({"erreur": "Paramètres requis."}, status=400)
+
+        try:
+            source_dept = Departement.objects.get(pk=source_dept_id)
+        except Departement.DoesNotExist:
+            return Response({"erreur": "Département source introuvable."}, status=404)
 
         profils = ProfilUtilisateur.objects.filter(departement_id__in=target_dept_ids)
         count = 0
@@ -527,6 +573,26 @@ class DepartementGrantAccessView(APIView):
             "message": f"Accès révoqué pour {count} utilisateur(s).",
             "utilisateurs_affectes": count,
         })
+def delete(self, request):
+    source_dept_id = request.data.get('source_departement_id')
+    target_dept_ids = request.data.get('target_departement_ids', [])
+
+    if not source_dept_id or not target_dept_ids:
+        return Response({"erreur": "Paramètres requis."}, status=400)
+
+    profils = ProfilUtilisateur.objects.filter(departement_id__in=target_dept_ids)
+    count = 0
+    for profil in profils:
+        if profil.departements_autorises.filter(id=source_dept_id).exists():
+            # ✅ CORRECTION : on utilise l'ID directement (pas besoin de l'objet)
+            profil.departements_autorises.remove(source_dept_id)
+            count += 1
+
+    return Response({
+        "succes": True,
+        "message": f"Accès révoqué pour {count} utilisateur(s).",
+        "utilisateurs_affectes": count,
+    })
 
 
 class DocumentPermissionsView(APIView):

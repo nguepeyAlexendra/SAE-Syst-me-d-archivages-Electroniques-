@@ -56,17 +56,15 @@ class UserSerializer(serializers.ModelSerializer):
             return {"id": obj.profil.departement.id, "nom": obj.profil.departement.nom}
         return None
     
-
 class ConfigurationConnexionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConfigurationConnexion
-        fields = ['domaine_email_autorise', 'modifie_par', 'derniere_modification']
+        fields = ['domaine_email_autorise', 'two_fa_obligatoire', 'modifie_par', 'derniere_modification']
         read_only_fields = ['modifie_par', 'derniere_modification']
 
     def validate_domaine_email_autorise(self, value):
         if not value.strip():
             return value
-
         domaines = [d.strip() for d in value.split(',') if d.strip()]
         for domaine in domaines:
             if not domaine.startswith('@'):
@@ -93,6 +91,8 @@ class ProfilSerializer(serializers.ModelSerializer):
         model = ProfilUtilisateur
         fields = [
             'photo', 
+            'telephone',
+            'two_fa_active',
             'changement_mdp_obligatoire', 
             'departement', 
             'departement_nom',
@@ -148,3 +148,8 @@ class DomaineEmailSerializer(serializers.ModelSerializer):
         model = DomaineEmail
         fields = ['id', 'domaine', 'actif', 'date_ajout']
         read_only_fields = ['date_ajout']
+
+class Verify2FASerializer(serializers.Serializer):
+    """Valide le token temporaire et le code 2FA saisi par l'utilisateur."""
+    temp_token = serializers.CharField(max_length=64)
+    code = serializers.CharField(max_length=6)
