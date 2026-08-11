@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import Categorie, Departement, Tag, Document, LogAction, ConnexionLog
 import json
+from .utils import empreinte_sha256, purger_fichier_orphelin
 
 
 class CategorieSerializer(serializers.ModelSerializer):
@@ -28,10 +29,10 @@ class DocumentSerializer(serializers.ModelSerializer):
     departement_nom_en = serializers.CharField(source='departement.nom_en', read_only=True, default=None)
     departements_autorises_noms = serializers.SerializerMethodField()
     est_departement_origine = serializers.SerializerMethodField()
-    
+
     # ✅ Champ d'entrée RENOMMÉ pour éviter le conflit avec le ManyToMany 'tags' du modèle
     tags_input = serializers.CharField(required=False, write_only=True)
-    
+
     # ✅ Champ de sortie pour l'affichage
     tags_detail = TagSerializer(many=True, read_only=True, source='tags')
 
@@ -44,17 +45,17 @@ class DocumentSerializer(serializers.ModelSerializer):
             'largeur_px', 'hauteur_px', 'duree',
             'categorie', 'categorie_nom', 'departement', 'departement_nom', 'departement_nom_en',
             'tags_input', 'tags_detail',
-            'contenu_texte', 'statut', 'log_pipeline', 'cause_rejet',
+            'contenu_texte', 'statut', 'log_pipeline', 'cause_rejet', 'cause_rejet_en',
             'est_confidentiel', 'utilisateurs_autorises',
             'departements_autorises', 'departements_autorises_noms',
             'est_epingle', 'tentative_count', 'favoris',
             'est_supprime', 'date_suppression',
             'est_departement_origine',
-            'est_archive', 
+            'est_archive',
         ]
         read_only_fields = [
             'depose_par', 'taille_fichier', 'type_mime', 'groupe', 'contenu_texte',
-            'statut', 'log_pipeline', 'cause_rejet', 'largeur_px', 'hauteur_px', 'duree',
+            'statut', 'log_pipeline', 'cause_rejet', 'cause_rejet_en', 'largeur_px', 'hauteur_px', 'duree',
             'date_derniere_modification', 'est_supprime', 'date_suppression', 'tentative_count',
             'miniature',
         ]
@@ -85,7 +86,7 @@ class DocumentSerializer(serializers.ModelSerializer):
         # 🔥 DIAGNOSTIC : Afficher toutes les clés reçues
         print("=" * 60)
         print("🔍 DONNÉES REÇUES (CLÉS) :", list(validated_data.keys()))
-        
+
         # Extraire tags_input (nom unique, pas de conflit)
         tags_json = validated_data.pop('tags_input', None)
         print(f"🚨 tags_input trouvé : {tags_json}")
@@ -95,6 +96,20 @@ class DocumentSerializer(serializers.ModelSerializer):
         utilisateurs_autorises = validated_data.pop('utilisateurs_autorises', [])
         departements_autorises = validated_data.pop('departements_autorises', [])
         favoris = validated_data.pop('favoris', [])
+
+        # 🆕 Déduplication : même contenu = un seul fichier dans MinIO
+        fichier = validated_data.get("fichier")
+        if fichier is not None:
+            validated_data["sha256"] = empreinte_sha256(fichier)
+            existant = (
+                Document.objects
+                .filter(sha256=validated_data["sha256"])
+                .exclude(fichier="")
+                .first()
+            )
+            if existant:
+                # Le contenu existe déjà : on pointe vers lui, aucun upload
+                validated_data["fichier"] = existant.fichier.name
 
         # Créer le document
         document = Document.objects.create(**validated_data)
@@ -116,7 +131,7 @@ class DocumentSerializer(serializers.ModelSerializer):
                 print(f"   -> Valeur reçue : {repr(tags_json)}")
         else:
             print("⚠️ Aucun tag_input reçu.")
-        
+
         if utilisateurs_autorises:
             document.utilisateurs_autorises.set(utilisateurs_autorises)
         if departements_autorises:
@@ -131,9 +146,28 @@ class DocumentSerializer(serializers.ModelSerializer):
         utilisateurs_autorises = validated_data.pop('utilisateurs_autorises', None)
         departements_autorises = validated_data.pop('departements_autorises', None)
         favoris = validated_data.pop('favoris', None)
-        
+
+        # 🆕 Déduplication si on remplace le fichier
+        fichier = validated_data.get("fichier")
+        ancienne_cle = instance.fichier.name if fichier is not None else None
+        if fichier is not None:
+            validated_data["sha256"] = empreinte_sha256(fichier)
+            existant = (
+                Document.objects
+                .filter(sha256=validated_data["sha256"])
+                .exclude(fichier="")
+                .exclude(pk=instance.pk)
+                .first()
+            )
+            if existant:
+                validated_data["fichier"] = existant.fichier.name
+
         instance = super().update(instance, validated_data)
-        
+
+        # 🆑 Nettoie l'ancien fichier si plus personne ne le référence
+        if ancienne_cle:
+            purger_fichier_orphelin(ancienne_cle)
+
         if tags_json is not None:
             instance.tags.clear()
             try:
@@ -146,14 +180,14 @@ class DocumentSerializer(serializers.ModelSerializer):
                     instance.tags.add(tag)
             except json.JSONDecodeError:
                 pass
-                
+
         if utilisateurs_autorises is not None:
             instance.utilisateurs_autorises.set(utilisateurs_autorises)
         if departements_autorises is not None:
             instance.departements_autorises.set(departements_autorises)
         if favoris is not None:
             instance.favoris.set(favoris)
-            
+
         return instance
 
 
@@ -163,7 +197,7 @@ class LogActionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = LogAction
-        fields = ['id', 'document', 'document_titre', 'type_action', 'cause', 'effectue_par', 'effectue_par_nom', 'date_action']
+        fields = ['id', 'document', 'document_titre', 'type_action', 'cause', 'cause_en', 'effectue_par', 'effectue_par_nom', 'date_action']
 
 
 class ConnexionLogSerializer(serializers.ModelSerializer):

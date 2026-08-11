@@ -211,6 +211,7 @@ class DocumentArchiverView(APIView):
         LogAction.objects.create(
             document=doc, type_action=LogAction.TypeAction.ARCHIVAGE,
             cause=f"Archivé par {request.user.username}",
+            cause_en=f"Archived by {request.user.username}",
             effectue_par=request.user,
         )
         return Response({"succes": True, "message": f"Document '{titre}' archivé."})
@@ -228,6 +229,49 @@ class DocumentDesarchiverView(APIView):
         doc.date_suppression = None
         doc.save()
         return Response({"succes": True, "message": f"Document '{titre}' désarchivé."})
+
+
+class ExtraireTexteView(APIView):
+    """Extrait le texte OCR d'une image et le persiste dans contenu_texte."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _a_acces(self, user, doc):
+        if user.is_staff:
+            return True
+        profil = getattr(user, 'profil', None)
+        if not profil or not profil.departement_id:
+            return False
+        user_dept_id = profil.departement_id
+        extra_dept_ids = list(profil.departements_autorises.values_list('id', flat=True))
+        allowed_ids = [user_dept_id] + extra_dept_ids
+        if doc.departement_id not in allowed_ids and not doc.departements_autorises.filter(id=user_dept_id).exists():
+            return False
+        if doc.est_confidentiel and user != doc.depose_par and user not in doc.utilisateurs_autorises.all():
+            return False
+        return True
+
+    def post(self, request, pk):
+        doc = Document.objects.filter(pk=pk).exclude(statut=Document.Statut.REJETE).exclude(statut=Document.Statut.EN_ATTENTE).first()
+        if not doc:
+            return Response({"erreur": "Document introuvable."}, status=status.HTTP_404_NOT_FOUND)
+        if doc.groupe != 'images':
+            return Response({"erreur": "L'extraction de texte n'est disponible que pour les images."}, status=status.HTTP_400_BAD_REQUEST)
+        if not self._a_acces(request.user, doc):
+            return Response({"erreur": "Vous n'avez pas accès à ce document."}, status=status.HTTP_403_FORBIDDEN)
+
+        from .services import extraire_texte_ocr_document, _tesseract_disponible
+        if not _tesseract_disponible():
+            return Response({
+                "erreur": "L'OCR est indisponible : le moteur Tesseract n'est pas installé sur le serveur.",
+                "texte": None,
+            }, status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        try:
+            texte = extraire_texte_ocr_document(doc)
+            return Response({"texte": texte, "contenu_texte": doc.contenu_texte})
+        except Exception as e:
+            return Response({"erreur": f"Erreur lors de l'extraction : {str(e)}"},
+                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class LogActionListView(generics.ListAPIView):
@@ -357,9 +401,19 @@ class AdminStatsView(APIView):
             count=Count('id')
         ).order_by('-count')
 
-        top_rejet = LogAction.objects.filter(
+        top_rejet = list(LogAction.objects.filter(
             type_action=LogAction.TypeAction.REJET
-        ).values('cause').annotate(count=Count('id')).order_by('-count')[:5]
+        ).values('cause').annotate(count=Count('id')).order_by('-count')[:5])
+
+        causes_connues = [c['cause'] for c in top_rejet]
+        cause_en_map = dict(
+            LogAction.objects.filter(
+                type_action=LogAction.TypeAction.REJET,
+                cause__in=causes_connues,
+            ).exclude(cause_en='').values_list('cause', 'cause_en')
+        )
+        for c in top_rejet:
+            c['cause_en'] = cause_en_map.get(c['cause'], '')
 
         jours_activite = int(request.query_params.get('days', 7))
         date_debut_act = request.query_params.get('date_debut_activite')
@@ -600,22 +654,75 @@ class DocumentPermissionsView(APIView):
 
     def get(self, request):
         documents = Document.objects.filter(est_supprime=False).order_by('-date_depot')
+
+        # Départements autorisés via les profils (inter-départements) :
+        # pour un document du département D, les départements dont les membres
+        # ont D dans leur profil.departements_autorises.
+        acces_par_dept: dict[int, set[int]] = {}
+        for profil in (ProfilUtilisateur.objects
+                       .filter(departements_autorises__isnull=False, departement__isnull=False)
+                       .prefetch_related('departements_autorises')):
+            for da in profil.departements_autorises.all():
+                acces_par_dept.setdefault(da.id, set()).add(profil.departement_id)
+
+        # Membres par département
+        membres_par_dept: dict[int, list[tuple[int, str]]] = {}
+        for p in (ProfilUtilisateur.objects
+                  .filter(departement__isnull=False)
+                  .select_related('utilisateur', 'departement')):
+            membres_par_dept.setdefault(p.departement_id, []).append(
+                (p.utilisateur_id, p.utilisateur.username)
+            )
+
+        depts = {d.id: d for d in Departement.objects.all()}
+
         data = []
-        for doc in documents:
+        for doc in documents.select_related('departement', 'depose_par') \
+                            .prefetch_related('utilisateurs_autorises', 'departements_autorises'):
+            # Départements ayant accès : origine + M2M + inter-départements
+            dept_ids_effectifs: set[int] = set()
+            if doc.departement_id:
+                dept_ids_effectifs.add(doc.departement_id)
+                dept_ids_effectifs.update(acces_par_dept.get(doc.departement_id, set()))
+            m2m_dept_ids = set(doc.departements_autorises.values_list('id', flat=True))
+            dept_ids_effectifs.update(m2m_dept_ids)
+
+            # Utilisateurs ayant accès : déposant + M2M + membres des départements autorisés
+            utilisateurs: dict[int, dict] = {}
+            if doc.depose_par_id:
+                utilisateurs[doc.depose_par_id] = {
+                    'id': doc.depose_par_id,
+                    'username': doc.depose_par.username,
+                    'explicite': False,
+                }
+            for u in doc.utilisateurs_autorises.all():
+                utilisateurs[u.id] = {'id': u.id, 'username': u.username, 'explicite': True}
+            for did in dept_ids_effectifs:
+                for uid, uname in membres_par_dept.get(did, []):
+                    utilisateurs.setdefault(uid, {
+                        'id': uid, 'username': uname, 'explicite': False,
+                    })
+
+            departements = []
+            for did in sorted(dept_ids_effectifs):
+                dept = depts.get(did)
+                if not dept:
+                    continue
+                departements.append({
+                    'id': did,
+                    'nom': dept.nom,
+                    'nom_en': dept.nom_en or '',
+                    'explicite': did in m2m_dept_ids,
+                })
+
             data.append({
                 'id': doc.id,
                 'titre': doc.titre,
                 'departement_id': doc.departement_id,
                 'departement_nom': doc.departement.nom if doc.departement else None,
                 'groupe': doc.groupe,
-                'utilisateurs_autorises': [
-                    {'id': u.id, 'username': u.username}
-                    for u in doc.utilisateurs_autorises.all()
-                ],
-                'departements_autorises': [
-                    {'id': d.id, 'nom': d.nom}
-                    for d in doc.departements_autorises.all()
-                ],
+                'utilisateurs_autorises': sorted(utilisateurs.values(), key=lambda x: x['username'].lower()),
+                'departements_autorises': departements,
             })
         return Response(data)
 
@@ -780,6 +887,7 @@ class PartagerDocumentView(APIView):
                     document=document,
                     type_action=type_action,
                     cause=f"Partagé avec {email_destinataire}",
+                    cause_en=f"Shared with {email_destinataire}",
                     effectue_par=request.user,
                 )
             except Exception:

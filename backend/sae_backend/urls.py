@@ -11,7 +11,7 @@ from apps.documents.views import (
     TagListView, TagDetailView, AdminStatsView,
 )
 from apps.accounts.views import MotDePasseOublieView, ConfirmerMotDePasseOublieView
-from apps.accounts.views import AdminUserListView, AdminUserToggleActiveView, AdminUserToggleAdminView, AdminUserDepartementsAutorisesView
+from apps.accounts.views import AdminUserListView, AdminUserToggleActiveView, AdminUserToggleAdminView, AdminUserDepartementsAutorisesView, AdminUserResetPasswordView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -38,6 +38,7 @@ urlpatterns = [
     path('api/admin/utilisateurs/<int:pk>/desactiver/', AdminUserToggleActiveView.as_view(), name='admin-utilisateur-desactiver'),
     path('api/admin/utilisateurs/<int:pk>/', AdminUserToggleAdminView.as_view(), name='admin-utilisateur-role'),
     path('api/admin/utilisateurs/<int:pk>/departements-autorises/', AdminUserDepartementsAutorisesView.as_view(), name='admin-utilisateur-departements-autorises'),
+    path('api/admin/utilisateurs/<int:pk>/reset-password/', AdminUserResetPasswordView.as_view(), name='admin-utilisateur-reset-password'),
 ]
 
 if settings.DEBUG:

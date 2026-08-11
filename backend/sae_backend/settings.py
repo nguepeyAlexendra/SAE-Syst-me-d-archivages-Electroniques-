@@ -155,6 +155,15 @@ AWS_S3_FILE_OVERWRITE = False
 AWS_DEFAULT_ACL = None
 AWS_QUERYSTRING_AUTH = True
 
+# ==========================================
+# CONFIGURATION OCR (Tesseract)
+# ==========================================
+# TESSERACT_CMD : chemin du binaire tesseract (Windows : "C:\\Program Files\\Tesseract-OCR\\tesseract.exe")
+# Laissez vide si tesseract est dans le PATH.
+TESSERACT_CMD = env("TESSERACT_CMD", default=None)
+# Langues Tesseract séparées par '+'. 'fra+eng' nécessite les données linguistiques fra + eng.
+TESSERACT_LANGS = env("TESSERACT_LANGS", default="fra+eng")
+
 # Envoi réel d'emails via SMTP (Gmail)
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'

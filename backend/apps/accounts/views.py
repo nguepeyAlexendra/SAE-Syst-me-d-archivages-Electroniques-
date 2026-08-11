@@ -93,6 +93,69 @@ EMAIL_HTML_TEMPLATE = """
 """
 
 
+RESET_EMAIL_HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Réinitialisation de mot de passe - SAE</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #f1f5f9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; -webkit-font-smoothing: antialiased; color: #334155;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background-color: #f1f5f9; padding: 40px 20px;">
+        <tr>
+            <td align="center">
+                <table role="presentation" width="600" cellspacing="0" cellpadding="0" style="max-width: 600px; width: 100%; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.05); border: 1px solid #e2e8f0;">
+                    <tr>
+                        <td style="background-color: #ffffff; padding: 40px 30px 30px 30px; text-align: center; border-bottom: 1px solid #f1f5f9;">
+                            <img src="https://i.imgur.com/oXxC88s.png" alt="Logo SAE" style="display: block; margin: 0 auto 20px auto; max-width: 90px; height: auto;">
+                            <h1 style="margin: 0; color: #0f172a; font-size: 22px; font-weight: 600; letter-spacing: -0.3px; font-family: 'Segoe UI', sans-serif;">Réinitialisation de mot de passe</h1>
+                            <p style="margin: 8px 0 0 0; color: #64748b; font-size: 13px; font-weight: 400; font-family: 'Segoe UI', sans-serif;">Votre mot de passe a été réinitialisé par un administrateur</p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 40px;">
+                            <p style="margin: 0 0 28px 0; color: #334155; font-size: 16px; line-height: 1.7; font-family: 'Segoe UI', sans-serif;">
+                                Bonjour <strong style="color: #0f172a; font-weight: 600;">{{ username }}</strong>,
+                            </p>
+                            <p style="margin: 0 0 32px 0; color: #475569; font-size: 15px; line-height: 1.7; font-family: 'Segoe UI', sans-serif;">
+                                Un administrateur a réinitialisé votre mot de passe sur la plateforme <strong style="color: #0f172a;">SAE</strong>. Vous trouverez ci-dessous votre mot de passe temporaire.
+                            </p>
+                            <div style="background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%); border: 1px solid #e2e8f0; border-radius: 8px; padding: 28px; margin: 28px 0; box-shadow: 0 1px 4px rgba(0,0,0,0.05);">
+                                <p style="margin: 0 0 12px 0; color: #64748b; font-size: 13px; text-transform: uppercase; letter-spacing: 1px; font-weight: 500; font-family: 'Segoe UI', sans-serif;">Mot de passe temporaire</p>
+                                <p style="margin: 0; padding: 12px 16px; background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; color: #0f172a; font-size: 18px; font-weight: 600; letter-spacing: 1.5px; font-family: 'Courier New', Courier, monospace; text-align: center;">{{ password }}</p>
+                            </div>
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin: 32px 0;">
+                                <tr>
+                                    <td align="center">
+                                        <a href="{{ site_url }}" style="display: inline-block; padding: 12px 36px; background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); color: #ffffff; text-decoration: none; border-radius: 8px; font-weight: 500; font-size: 15px; letter-spacing: 0.3px; font-family: 'Segoe UI', sans-serif; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.2);">Se connecter</a>
+                                    </td>
+                                </tr>
+                            </table>
+                            <p style="margin: 0 0 24px 0; padding: 16px 20px; background-color: #fffbeb; border-left: 3px solid #f59e0b; border-radius: 4px; color: #92400e; font-size: 14px; line-height: 1.6; font-style: italic; font-family: 'Segoe UI', sans-serif;">
+                                <strong style="font-weight: 600;">Important :</strong> Pour des raisons de sécurité, vous serez invité à modifier ce mot de passe dès votre première connexion.
+                            </p>
+                            <p style="margin: 0; color: #94a3b8; font-size: 14px; line-height: 1.7; text-align: center; font-family: 'Segoe UI', sans-serif;">
+                                Si vous n'êtes pas à l'origine de cette demande, veuillez contacter votre administrateur.
+                            </p>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td style="background-color: #f8fafc; padding: 24px 40px; text-align: center; border-top: 1px solid #e2e8f0;">
+                            <p style="margin: 0; color: #94a3b8; font-size: 12px; line-height: 1.6; font-family: 'Segoe UI', sans-serif;">
+                                Cet e-mail a été envoyé automatiquement par la plateforme SAE.<br>© 2026 SAE. Tous droits réservés.
+                            </p>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+
+
 class VerifierEmailView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -563,12 +626,105 @@ class AdminUserToggleAdminView(APIView):
     def patch(self, request, pk):
         try:
             user = User.objects.get(pk=pk, is_superuser=False)
-            est_admin = request.data.get('est_admin', False)
-            user.is_staff = bool(est_admin)
-            user.save()
-            return Response({"est_admin": user.is_staff})
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        est_admin = bool(request.data.get('est_admin', False))
+        departement_id = request.data.get('departement_id')
+
+        profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
+
+        if est_admin:
+            # 👑 PROMOTION ADMIN : on vide le département
+            user.is_staff = True
+            profil.departement = None
+        else:
+            # 👤 RÉTROGRADATION : département OBLIGATOIRE
+            if not departement_id:
+                return Response(
+                    {"erreur": "Un département est obligatoire pour un utilisateur non-admin."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            try:
+                departement = Departement.objects.get(id=departement_id)
+            except Departement.DoesNotExist:
+                return Response({"erreur": "Département invalide."}, status=status.HTTP_400_BAD_REQUEST)
+            user.is_staff = False
+            profil.departement = departement
+
+        user.save()
+        profil.save()
+
+        dept_data = None
+        if profil.departement:
+            dept_data = {"id": profil.departement.id, "nom": profil.departement.nom}
+
+        return Response({
+            "est_admin": user.is_staff,
+            "departement": dept_data,
+        })
+
+class AdminUserResetPasswordView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, is_superuser=False)
+        except User.DoesNotExist:
+            return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
+
+        nouveau_mdp = request.data.get('nouveau_mot_de_passe', '').strip()
+        if nouveau_mdp and len(nouveau_mdp) < 8:
+            return Response({"erreur": "Le mot de passe doit contenir au moins 8 caractères."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not nouveau_mdp:
+            alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+            nouveau_mdp = ''.join(secrets.choice(alphabet) for _ in range(12))
+
+        print("\n" + "=" * 60)
+        print(f" RÉINITIALISATION DU MOT DE PASSE pour {user.username} : {nouveau_mdp}")
+        print("=" * 60 + "\n")
+
+        user.set_password(nouveau_mdp)
+        user.save()
+
+        profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
+        profil.changement_mdp_obligatoire = True
+        profil.save()
+
+        try:
+            Token.objects.filter(user=user).delete()
+        except Exception:
+            pass
+
+        html_content = RESET_EMAIL_HTML_TEMPLATE.replace("{{ username }}", user.username) \
+                                                .replace("{{ password }}", nouveau_mdp) \
+                                                .replace("{{ site_url }}", getattr(settings, 'SITE_URL', 'http://localhost:5173'))
+
+        texte_brut = (f"Bonjour {user.username},\n\n"
+                      f"Votre mot de passe SAE a été réinitialisé par un administrateur.\n\n"
+                      f"Mot de passe temporaire : {nouveau_mdp}\n\n"
+                      f"Connectez-vous sur : {getattr(settings, 'SITE_URL', 'http://localhost:5173')}\n\n"
+                      f"Vous devrez changer ce mot de passe à la première connexion.\n")
+
+        try:
+            send_mail(
+                subject="SAE - Réinitialisation de votre mot de passe",
+                message=texte_brut,
+                from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@sae.local'),
+                recipient_list=[user.email],
+                html_message=html_content,
+                fail_silently=False,
+            )
+            print(f"✅ SUCCÈS : Email de réinitialisation envoyé à {user.email}")
+        except Exception as e:
+            print(f"❌ ERREUR CRITIQUE D'ENVOI D'EMAIL : {e}")
+
+        return Response({
+            "succes": True,
+            "message": "Mot de passe réinitialisé. Un email avec le mot de passe temporaire a été envoyé.",
+            "mot_de_passe": nouveau_mdp,
+        }, status=status.HTTP_200_OK)
 
 
 class AdminUserDepartementsAutorisesView(APIView):

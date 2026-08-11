@@ -64,6 +64,67 @@ def _horodatage():
     return datetime.now().isoformat()
 
 
+def _tesseract_disponible():
+    """Renvoie True si le moteur Tesseract est installé et joignable, sinon False."""
+    try:
+        import pytesseract
+    except ImportError:
+        return False
+    from django.conf import settings
+    cmd = getattr(settings, 'TESSERACT_CMD', None)
+    if cmd:
+        pytesseract.pytesseract.tesseract_cmd = cmd
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except Exception:
+        return False
+
+
+def _extraire_texte_ocr(contenu_fichier):
+    """Extrait le texte d'une image (octets) via Tesseract OCR.
+    Lève une RuntimeError si Tesseract est absent ; sinon renvoie le texte (str)."""
+    if not _tesseract_disponible():
+        raise RuntimeError("Tesseract (moteur OCR) n'est pas installé sur le serveur.")
+
+    import pytesseract
+    from django.conf import settings
+    from PIL import Image, ImageFilter, ImageOps
+
+    try:
+        langue = getattr(settings, 'TESSERACT_LANGS', 'fra+eng')
+        with Image.open(io.BytesIO(contenu_fichier)) as img:
+            img = img.convert('L').filter(ImageFilter.SHARPEN)
+            largeur, hauteur = img.size
+            if min(largeur, hauteur) < 2000:
+                facteur = max(2, int(2000 / min(largeur, hauteur)))
+                img = img.resize((largeur * facteur, hauteur * facteur), Image.LANCZOS)
+            texte = pytesseract.image_to_string(img, lang=langue, config='--psm 6')
+    except pytesseract.TesseractError:
+        texte = ""
+    except Exception:
+        texte = ""
+    return (texte or "").strip()
+
+
+def extraire_texte_ocr_document(document):
+    """Lit le fichier MinIO du document, exécute l'OCR et persiste le texte
+    dans document.contenu_texte. Renvoie le texte extrait."""
+    if not _tesseract_disponible():
+        raise RuntimeError("Tesseract (moteur OCR) n'est pas installé sur le serveur.")
+
+    document.fichier.open('rb')
+    try:
+        contenu_fichier = document.fichier.read()
+    finally:
+        document.fichier.close()
+
+    texte = _extraire_texte_ocr(contenu_fichier)
+    document.contenu_texte = texte
+    document.save(update_fields=['contenu_texte'])
+    return texte
+
+
 def _ajouter_etape(document, etape, libelle, statut_etape):
     document.log_pipeline.append({
         "etape": etape,
@@ -117,8 +178,10 @@ def executer_pipeline(document, groupe_attendu=None):
         document.log_pipeline[-1]["horodatage"] = _horodatage()
         document.statut = Document.Statut.REJETE
         document.cause_rejet = f"Format non autorisé : {type_mime_reel}"
+        document.cause_rejet_en = f"Unauthorized format: {type_mime_reel}"
         document.save()
-        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET,
+                                 cause=document.cause_rejet, cause_en=document.cause_rejet_en)
         return
 
     groupe_reel = determiner_groupe(type_mime_reel)
@@ -127,8 +190,10 @@ def executer_pipeline(document, groupe_attendu=None):
         document.log_pipeline[-1]["horodatage"] = _horodatage()
         document.statut = Document.Statut.REJETE
         document.cause_rejet = f"Format incorrect pour ce formulaire. Un fichier de type '{groupe_attendu}' était attendu."
+        document.cause_rejet_en = f"Incorrect format for this form. A '{groupe_attendu}' type file was expected."
         document.save()
-        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET,
+                                 cause=document.cause_rejet, cause_en=document.cause_rejet_en)
         return
 
     document.groupe = groupe_reel
@@ -143,8 +208,10 @@ def executer_pipeline(document, groupe_attendu=None):
         document.log_pipeline[-1]["horodatage"] = _horodatage()
         document.statut = Document.Statut.REJETE
         document.cause_rejet = "Fichier rejeté : signature virale détectée (test EICAR)."
+        document.cause_rejet_en = "File rejected: viral signature detected (EICAR test)."
         document.save()
-        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET, cause=document.cause_rejet)
+        LogAction.objects.create(document=document, type_action=LogAction.TypeAction.REJET,
+                                 cause=document.cause_rejet, cause_en=document.cause_rejet_en)
         return
     document.log_pipeline[-1]["statut"] = "termine"
     document.log_pipeline[-1]["horodatage"] = _horodatage()
@@ -175,7 +242,24 @@ def executer_pipeline(document, groupe_attendu=None):
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-        # --- Étape 4 : tagging automatique contextuel ---
+    # --- Étape 3b : OCR automatique des images (best-effort, non bloquant) ---
+    if groupe_reel == 'images':
+        _ajouter_etape(document, "ocr", "Extraction de texte (OCR)", "en_cours")
+        try:
+            texte_ocr = _extraire_texte_ocr(contenu_fichier)
+            if texte_ocr:
+                document.contenu_texte = texte_ocr
+            document.log_pipeline[-1]["statut"] = "termine"
+        except RuntimeError:
+            # Tesseract absent : on ne bloque pas le dépôt, l'étape est marquée comme indisponible
+            document.log_pipeline[-1]["statut"] = "indisponible"
+            document.log_pipeline[-1]["libelle"] += " (Tesseract non installé)"
+        except Exception:
+            document.log_pipeline[-1]["statut"] = "echec"
+        document.log_pipeline[-1]["horodatage"] = _horodatage()
+        document.save()
+
+    # --- Étape 4 : tagging automatique contextuel ---
     _ajouter_etape(document, "tagging", "Tagging automatique", "en_cours")
     from .models import Tag
     from datetime import datetime
@@ -239,4 +323,6 @@ def executer_pipeline(document, groupe_attendu=None):
     # --- Fin du pipeline : document validé ---
     document.statut = Document.Statut.VALIDE
     document.save()
-    LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION, cause="Document validé et indexé avec succès")
+    LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION,
+                             cause="Document validé et indexé avec succès",
+                             cause_en="Document validated and indexed successfully")
