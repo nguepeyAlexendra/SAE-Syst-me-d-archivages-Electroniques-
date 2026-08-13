@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
+from apps.documents.scanner import ScanDemoView
 
 from apps.documents.views import (
     AdminConfigurationView, CategorieListView, CategorieDetailView,
@@ -39,6 +40,7 @@ urlpatterns = [
     path('api/admin/utilisateurs/<int:pk>/', AdminUserToggleAdminView.as_view(), name='admin-utilisateur-role'),
     path('api/admin/utilisateurs/<int:pk>/departements-autorises/', AdminUserDepartementsAutorisesView.as_view(), name='admin-utilisateur-departements-autorises'),
     path('api/admin/utilisateurs/<int:pk>/reset-password/', AdminUserResetPasswordView.as_view(), name='admin-utilisateur-reset-password'),
+    path('api/scans/demo/', ScanDemoView.as_view()),
 ]
 
 if settings.DEBUG:

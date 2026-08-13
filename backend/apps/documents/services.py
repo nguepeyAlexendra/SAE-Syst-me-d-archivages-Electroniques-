@@ -293,24 +293,23 @@ def executer_pipeline(document, groupe_attendu=None):
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-    # ✅ --- Étape 5b : génération de la miniature (PDF uniquement) ---
-    # (CORRIGÉ : Maintenant correctement indenté à l'intérieur de la fonction)
+        # --- Étape 5b : génération de la miniature (TOUS formats) ---
     _ajouter_etape(document, "miniature", "Génération de la miniature", "en_cours")
-    if type_mime_reel == 'application/pdf':
-        try:
-            import fitz  # PyMuPDF
-            pdf = fitz.open(stream=contenu_fichier, filetype="pdf")
-            premiere_page = pdf[0]
-            pixmap = premiere_page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))
-            image_bytes = pixmap.tobytes("png")
-            nom_miniature = f"miniature_{document.id}.png"
-            document.miniature.save(nom_miniature, ContentFile(image_bytes), save=False)
-            pdf.close()
-        except Exception as e:
-            print(f"Echec generation miniature PDF {document.id}: {e}")
-            pass  # Ne bloque pas le document
-
-    document.log_pipeline[-1]["statut"] = "termine"
+    try:
+        from .utils_miniatures import generer_miniature
+        
+        jpeg_bytes = generer_miniature(contenu_fichier, document.fichier.name)
+        if jpeg_bytes:
+            nom_miniature = f"miniature_{document.id}.jpg"
+            document.miniature.save(nom_miniature, ContentFile(jpeg_bytes), save=False)
+            document.log_pipeline[-1]["statut"] = "termine"
+        else:
+            document.log_pipeline[-1]["statut"] = "indisponible"
+            document.log_pipeline[-1]["libelle"] += " (aperçu non disponible)"
+    except Exception as e:
+        print(f"Echec generation miniature {document.id}: {e}")
+        document.log_pipeline[-1]["statut"] = "echec"
+    
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
