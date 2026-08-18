@@ -3,7 +3,8 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     VerifierEmailView, 
     LoginView, 
-    Verify2FAView,          # ← AJOUTÉ
+    Verify2FAView,
+    Resend2FAView,
     ConfigurationConnexionView, 
     ProfilView, 
     ChangerMotDePasseView,
@@ -22,6 +23,7 @@ urlpatterns = [
     path('verifier-email/', VerifierEmailView.as_view(), name='verifier-email'),
     path('connexion/', LoginView.as_view(), name='connexion'),
     path('verify-2fa/', Verify2FAView.as_view(), name='verify-2fa'),  # ← AJOUTÉ
+    path('resend-2fa/', Resend2FAView.as_view(), name='resend-2fa'),  # ← AJOUTÉ
     path('configuration/', ConfigurationConnexionView.as_view(), name='configuration-connexion'),
     path('profil/', ProfilView.as_view(), name='profil'),
     path('changer-mot-de-passe/', ChangerMotDePasseView.as_view(), name='changer-mot-de-passe'),

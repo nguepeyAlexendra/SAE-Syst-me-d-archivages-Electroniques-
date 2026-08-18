@@ -296,7 +296,7 @@ def executer_pipeline(document, groupe_attendu=None):
         # --- Étape 5b : génération de la miniature (TOUS formats) ---
     _ajouter_etape(document, "miniature", "Génération de la miniature", "en_cours")
     try:
-        from .utils_miniatures import generer_miniature
+        from .utils_miniatures import generer_miniature, generer_apercu_pdf
         
         jpeg_bytes = generer_miniature(contenu_fichier, document.fichier.name)
         if jpeg_bytes:
@@ -306,6 +306,11 @@ def executer_pipeline(document, groupe_attendu=None):
         else:
             document.log_pipeline[-1]["statut"] = "indisponible"
             document.log_pipeline[-1]["libelle"] += " (aperçu non disponible)"
+
+        # 🆕 Aperçu PDF pour les fichiers Office (pptx, docx, xlsx…)
+        pdf_bytes = generer_apercu_pdf(contenu_fichier, document.fichier.name)
+        if pdf_bytes:
+            document.apercu_pdf.save(f"apercu_{document.id}.pdf", ContentFile(pdf_bytes), save=False)
     except Exception as e:
         print(f"Echec generation miniature {document.id}: {e}")
         document.log_pipeline[-1]["statut"] = "echec"

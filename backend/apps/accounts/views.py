@@ -451,6 +451,73 @@ class Verify2FAView(APIView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+class Resend2FAView(APIView):
+    """Régénère et renvoie un nouveau code 2FA pour un token temporaire encore valide."""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    def post(self, request):
+        temp_token = request.data.get('temp_token')
+
+        if not temp_token:
+            return Response({"erreur": "Token temporaire requis."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            profil = ProfilUtilisateur.objects.get(token_2fa_temporaire=temp_token)
+        except ProfilUtilisateur.DoesNotExist:
+            return Response({"erreur": "Session de vérification invalide ou expirée."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Trop de tentatives : tout nettoyer et obliger à se reconnecter
+        if profil.tentatives_2fa_echouees >= 3:
+            profil.code_2fa = None
+            profil.code_2fa_expiration = None
+            profil.token_2fa_temporaire = None
+            profil.tentatives_2fa_echouees = 0
+            profil.save()
+            return Response({
+                "erreur": "Trop de tentatives échouées. Veuillez vous reconnecter depuis le début."
+            }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+
+        # Rate Limiting (max 3 codes par heure, partagé avec LoginView)
+        if profil.date_derniere_demande_code:
+            temps_ecoule = timezone.now() - profil.date_derniere_demande_code
+            if temps_ecoule < timedelta(hours=1):
+                if profil.nb_codes_envoyes_heure >= 3:
+                    return Response({
+                        "erreur": "Trop de codes demandés. Veuillez réessayer dans une heure."
+                    }, status=status.HTTP_429_TOO_MANY_REQUESTS)
+                profil.nb_codes_envoyes_heure += 1
+            else:
+                profil.nb_codes_envoyes_heure = 1
+        else:
+            profil.nb_codes_envoyes_heure = 1
+
+        profil.date_derniere_demande_code = timezone.now()
+
+        # Générer un nouveau code (le temp_token reste identique)
+        code = str(secrets.randbelow(1000000)).zfill(6)
+        profil.code_2fa = code
+        profil.code_2fa_expiration = timezone.now() + timedelta(minutes=5)
+        profil.save()
+
+        print("\n" + "=" * 60)
+        print(f"🔐 [CODE 2FA RENVOYÉ] Pour {profil.utilisateur.email} : {code}")
+        print("=" * 60 + "\n")
+
+        try:
+            send_mail(
+                'Code de vérification SAE',
+                f"Votre code de connexion est : {code}. Il expire dans 5 minutes.",
+                settings.DEFAULT_FROM_EMAIL,
+                [profil.utilisateur.email],
+                fail_silently=True,
+            )
+        except Exception:
+            pass
+
+        return Response({"succes": True, "message": "Code renvoyé."}, status=status.HTTP_200_OK)
+
+
 class ConfigurationConnexionView(generics.RetrieveUpdateAPIView):
     serializer_class = ConfigurationConnexionSerializer
 

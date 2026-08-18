@@ -152,16 +152,22 @@ class DocumentDetailView(generics.RetrieveUpdateAPIView):
             | Q(est_confidentiel=True, depose_par=user)
             | Q(est_confidentiel=True, utilisateurs_autorises=user)
         ).distinct()
-
-    def perform_update(self, serializer):
-        user = self.request.user
-        if user.is_staff:
-            return serializer.save()
-        document = self.get_object()
-        profil = getattr(user, 'profil', None)
-        if not profil or document.departement_id != profil.departement_id:
-            raise permissions.PermissionDenied("Vous n'avez pas les droits pour modifier ce document (accès en lecture seule).")
-        serializer.save()
+def perform_update(self, serializer):
+    user = self.request.user
+    document = self.get_object()
+    
+    # ✅ Admin : peut tout modifier
+    if user.is_staff:
+        return serializer.save()
+    
+    # ✅ Propriétaire du document : peut le modifier
+    if document.depose_par == user:
+        return serializer.save()
+    
+    # ❌ Sinon : accès refusé
+    raise permissions.PermissionDenied(
+        "Vous ne pouvez modifier que vos propres documents."
+    )
 
 
 class DocumentToggleFavoriView(APIView):
@@ -947,3 +953,4 @@ class MinioStatsView(APIView):
                 "total_objects": 0,
                 "total_size_gb": 0
             }, status=503)
+

@@ -39,6 +39,7 @@ INSTALLED_APPS = [
     # --- Nos apps ---
     'apps.accounts',
     'apps.documents',
+    'apps.assistant',
     'apps.notifications',
     'django_filters',
 

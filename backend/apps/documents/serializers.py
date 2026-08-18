@@ -29,6 +29,7 @@ class DocumentSerializer(serializers.ModelSerializer):
     departement_nom_en = serializers.CharField(source='departement.nom_en', read_only=True, default=None)
     departements_autorises_noms = serializers.SerializerMethodField()
     est_departement_origine = serializers.SerializerMethodField()
+    est_epingle = serializers.BooleanField(default=False)
 
     # ✅ Champ d'entrée RENOMMÉ pour éviter le conflit avec le ManyToMany 'tags' du modèle
     tags_input = serializers.CharField(required=False, write_only=True)
@@ -39,7 +40,7 @@ class DocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Document
         fields = [
-            'id', 'titre', 'fichier', 'miniature',
+            'id', 'titre', 'fichier', 'miniature', 'apercu_pdf',
             'type_source', 'depose_par', 'depose_par_nom', 'date_depot', 'date_derniere_modification',
             'taille_fichier', 'type_mime', 'groupe', 'auteur_document',
             'largeur_px', 'hauteur_px', 'duree',
@@ -57,7 +58,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             'depose_par', 'taille_fichier', 'type_mime', 'groupe', 'contenu_texte',
             'statut', 'log_pipeline', 'cause_rejet', 'cause_rejet_en', 'largeur_px', 'hauteur_px', 'duree',
             'date_derniere_modification', 'est_supprime', 'date_suppression', 'tentative_count',
-            'miniature',
+            'miniature', 'apercu_pdf',
         ]
 
     def get_departements_autorises_noms(self, obj):
@@ -83,16 +84,25 @@ class DocumentSerializer(serializers.ModelSerializer):
         return value
 
     def create(self, validated_data):
-        # 🔥 DIAGNOSTIC : Afficher toutes les clés reçues
         print("=" * 60)
         print("🔍 DONNÉES REÇUES (CLÉS) :", list(validated_data.keys()))
 
-        # Extraire tags_input (nom unique, pas de conflit)
-        tags_json = validated_data.pop('tags_input', None)
-        print(f"🚨 tags_input trouvé : {tags_json}")
+        fichier = validated_data.get("fichier")
+        if fichier is not None:
+            print("📄 FICHIER REÇU :")
+            print(f"   - Nom : {fichier.name}")
+            print(f"   - Taille : {fichier.size} octets")
+            print(f"   - Content-Type : {getattr(fichier, 'content_type', 'INCONNU')}")
+            fichier.seek(0)
+            debut = fichier.read(5)
+            fichier.seek(0)
+            print(f"   - 5 premiers octets : {debut}")
+            print(f"   - Est un PDF ? {debut == b'%PDF-'}")
         print("=" * 60)
 
-        # Extraire les autres champs ManyToMany
+        tags_json = validated_data.pop('tags_input', None)
+        print(f"🚨 tags_input trouvé : {tags_json}")
+
         utilisateurs_autorises = validated_data.pop('utilisateurs_autorises', [])
         departements_autorises = validated_data.pop('departements_autorises', [])
         favoris = validated_data.pop('favoris', [])
@@ -108,13 +118,10 @@ class DocumentSerializer(serializers.ModelSerializer):
                 .first()
             )
             if existant:
-                # Le contenu existe déjà : on pointe vers lui, aucun upload
                 validated_data["fichier"] = existant.fichier.name
 
-        # Créer le document
         document = Document.objects.create(**validated_data)
 
-        # Traiter les tags
         if tags_json:
             try:
                 tags_list = json.loads(tags_json)
@@ -164,6 +171,33 @@ class DocumentSerializer(serializers.ModelSerializer):
 
         instance = super().update(instance, validated_data)
 
+        # ✅ CRÉATION DU LOG DE MODIFICATION
+        if validated_data:
+            changements = []
+            changements_en = []
+
+            for champ, valeur in validated_data.items():
+                if champ == 'fichier':
+                    changements.append("fichier remplacé")
+                    changements_en.append("file replaced")
+                elif champ == 'miniature':
+                    continue
+                else:
+                    changements.append(champ)
+                    changements_en.append(champ)
+
+            if changements:
+                cause_fr = f"Modifié : {', '.join(changements)}"
+                cause_en = f"Modified: {', '.join(changements_en)}"
+
+                LogAction.objects.create(
+                    document=instance,
+                    type_action=LogAction.TypeAction.MODIFICATION,
+                    cause=cause_fr,
+                    cause_en=cause_en,
+                    effectue_par=self.context['request'].user if 'request' in self.context else None,
+                )
+
         # 🆑 Nettoie l'ancien fichier si plus personne ne le référence
         if ancienne_cle:
             purger_fichier_orphelin(ancienne_cle)
@@ -178,13 +212,38 @@ class DocumentSerializer(serializers.ModelSerializer):
                         defaults={'couleur': '#6366f1'}
                     )
                     instance.tags.add(tag)
+
+                if tags_list:
+                    LogAction.objects.create(
+                        document=instance,
+                        type_action=LogAction.TypeAction.MODIFICATION,
+                        cause=f"Tags modifiés : {', '.join(tags_list)}",
+                        cause_en=f"Tags modified: {', '.join(tags_list)}",
+                        effectue_par=self.context['request'].user if 'request' in self.context else None,
+                    )
             except json.JSONDecodeError:
                 pass
 
         if utilisateurs_autorises is not None:
             instance.utilisateurs_autorises.set(utilisateurs_autorises)
+            LogAction.objects.create(
+                document=instance,
+                type_action=LogAction.TypeAction.MODIFICATION,
+                cause="Utilisateurs autorisés modifiés",
+                cause_en="Authorized users modified",
+                effectue_par=self.context['request'].user if 'request' in self.context else None,
+            )
+
         if departements_autorises is not None:
             instance.departements_autorises.set(departements_autorises)
+            LogAction.objects.create(
+                document=instance,
+                type_action=LogAction.TypeAction.MODIFICATION,
+                cause="Départements autorisés modifiés",
+                cause_en="Authorized departments modified",
+                effectue_par=self.context['request'].user if 'request' in self.context else None,
+            )
+
         if favoris is not None:
             instance.favoris.set(favoris)
 
@@ -193,11 +252,16 @@ class DocumentSerializer(serializers.ModelSerializer):
 
 class LogActionSerializer(serializers.ModelSerializer):
     document_titre = serializers.CharField(source='document.titre', read_only=True, default=None)
-    effectue_par_nom = serializers.CharField(source='effectue_par.username', read_only=True, default=None)
+    effectue_par_nom = serializers.SerializerMethodField()
 
     class Meta:
         model = LogAction
         fields = ['id', 'document', 'document_titre', 'type_action', 'cause', 'cause_en', 'effectue_par', 'effectue_par_nom', 'date_action']
+
+    def get_effectue_par_nom(self, obj):
+        if obj.effectue_par:
+            return obj.effectue_par.username
+        return "Système (Pipeline ETL)"
 
 
 class ConnexionLogSerializer(serializers.ModelSerializer):
@@ -205,4 +269,4 @@ class ConnexionLogSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ConnexionLog
-        fields = ['id', 'utilisateur', 'utilisateur_nom', 'ip_address', 'user_agent', 'date_connexion']
+        fields = ['utilisateur', 'utilisateur_nom', 'ip_address', 'user_agent', 'date_connexion']

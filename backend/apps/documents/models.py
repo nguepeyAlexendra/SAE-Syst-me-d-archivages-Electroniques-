@@ -90,6 +90,12 @@ class Document(models.Model):
         blank=True,
         help_text="Aperçu généré automatiquement (1ère page pour les PDF)"
     )
+
+    apercu_pdf = models.FileField(
+        upload_to='apercus/%Y/%m/',
+        null=True, blank=True,
+        help_text="Aperçu PDF généré automatiquement pour les fichiers Office (pptx, docx…)"
+    )
     type_source = models.CharField(
         max_length=20, choices=TypeSource.choices, default=TypeSource.NUMERIQUE
     )
@@ -125,7 +131,7 @@ class Document(models.Model):
         'Departement', blank=True, related_name='documents_autorises',
         help_text="Départements supplémentaires autorisés à voir ce document"
     )
-    est_epingle = models.BooleanField(default=False)
+   
     tentative_count = models.PositiveIntegerField(default=0)
 
     # ✅ Champ pour l'archivage
@@ -137,6 +143,9 @@ class Document(models.Model):
     favoris = models.ManyToManyField(
         User, blank=True, related_name='documents_favoris'
     )
+
+    est_epingle = models.BooleanField(default=False)
+
     est_supprime = models.BooleanField(default=False)
     date_suppression = models.DateTimeField(null=True, blank=True)
 

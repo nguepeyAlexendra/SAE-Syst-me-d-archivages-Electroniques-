@@ -1,7 +1,14 @@
 from django.urls import path
 from .views import (
-    DocumentListCreateView, DocumentDetailView, DocumentToggleFavoriView, DocumentArchiverView,
-    DocumentDesarchiverView, LogActionListView, MinioStatsView, ServerStatsView, PartagerDocumentView,
+    DocumentListCreateView,
+    DocumentDetailView,
+    DocumentToggleFavoriView,
+    DocumentArchiverView,
+    DocumentDesarchiverView,
+    LogActionListView,
+    MinioStatsView,
+    ServerStatsView,
+    PartagerDocumentView,
     ExtraireTexteView,
 )
 

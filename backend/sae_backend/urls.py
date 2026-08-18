@@ -19,6 +19,7 @@ urlpatterns = [
     path('api/auth/', include('apps.accounts.urls')),
     path('api/documents/', include('apps.documents.urls')),
     path('api/notifications/', include('apps.notifications.urls')),
+    path('api/assistant/', include('apps.assistant.urls')),
     path('api-auth/', include('rest_framework.urls')),
 
     path('api/categories/', CategorieListView.as_view(), name='categories-list'),

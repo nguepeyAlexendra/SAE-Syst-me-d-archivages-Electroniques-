@@ -110,3 +110,13 @@ def _convertir_via_libreoffice(contenu: bytes, nom_fichier: str):
             print(f"❌ Conversion LibreOffice échouée ({nom_fichier}) : {e}")
     
     return None
+
+def generer_apercu_pdf(contenu: bytes, nom_fichier: str):
+    """
+    🆕 Renvoie les octets d'un PDF d'aperçu pour les fichiers Office
+    (docx, pptx, xlsx, odt…), ou None pour les autres formats.
+    """
+    suffixe = Path(nom_fichier).suffix.lower()
+    if suffixe not in EXTENSIONS_BUREAU:
+        return None
+    return _convertir_via_libreoffice(contenu, nom_fichier)
