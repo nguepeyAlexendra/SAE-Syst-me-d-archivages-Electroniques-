@@ -13,4 +13,4 @@ frontend/.env
 .DS_Store
 Thumbs.db
 .vscode/
-.idea/
+.idea/data_minio/
