@@ -266,23 +266,21 @@ def executer_pipeline(document, groupe_attendu=None):
 
     tags_auto = []
 
-   
-   
     # 2. Format du fichier (Ajouté selon le type MIME réel)
     if document.groupe == 'images':
-        sous_type = type_mime_reel.split('/')[-1].upper() # ex: JPEG, PNG
-        t, _ = Tag.objects.get_or_create(nom=sous_type, defaults={'couleur': '#10b981'}) # Vert
+        sous_type = type_mime_reel.split('/')[-1].upper()  # ex: JPEG, PNG
+        t, _ = Tag.objects.get_or_create(nom=sous_type, defaults={'couleur': '#10b981'})  # Vert
         tags_auto.append(t)
     elif type_mime_reel == 'application/pdf':
-        t, _ = Tag.objects.get_or_create(nom='PDF', defaults={'couleur': '#ef4444'}) # Rouge
+        t, _ = Tag.objects.get_or_create(nom='PDF', defaults={'couleur': '#ef4444'})  # Rouge
         tags_auto.append(t)
     elif 'spreadsheet' in type_mime_reel or 'excel' in type_mime_reel:
-        t, _ = Tag.objects.get_or_create(nom='Excel', defaults={'couleur': '#10b981'}) # Vert
+        t, _ = Tag.objects.get_or_create(nom='Excel', defaults={'couleur': '#10b981'})  # Vert
         tags_auto.append(t)
 
     # 3. Source (Ajouté UNIQUEMENT si c'est un scan)
     if document.type_source == 'scan':
-        t, _ = Tag.objects.get_or_create(nom='Scanné', defaults={'couleur': '#6b7280'}) # Gris
+        t, _ = Tag.objects.get_or_create(nom='Scanné', defaults={'couleur': '#6b7280'})  # Gris
         tags_auto.append(t)
 
     # Ajouter tous les tags automatiques au document
@@ -293,11 +291,11 @@ def executer_pipeline(document, groupe_attendu=None):
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
-        # --- Étape 5b : génération de la miniature (TOUS formats) ---
+    # --- Étape 5b : génération de la miniature (TOUS formats) ---
     _ajouter_etape(document, "miniature", "Génération de la miniature", "en_cours")
     try:
         from .utils_miniatures import generer_miniature, generer_apercu_pdf
-        
+
         jpeg_bytes = generer_miniature(contenu_fichier, document.fichier.name)
         if jpeg_bytes:
             nom_miniature = f"miniature_{document.id}.jpg"
@@ -314,7 +312,7 @@ def executer_pipeline(document, groupe_attendu=None):
     except Exception as e:
         print(f"Echec generation miniature {document.id}: {e}")
         document.log_pipeline[-1]["statut"] = "echec"
-    
+
     document.log_pipeline[-1]["horodatage"] = _horodatage()
     document.save()
 
@@ -330,3 +328,18 @@ def executer_pipeline(document, groupe_attendu=None):
     LogAction.objects.create(document=document, type_action=LogAction.TypeAction.VALIDATION,
                              cause="Document validé et indexé avec succès",
                              cause_en="Document validated and indexed successfully")
+
+    # 🆕 Indexation automatique dans Elasticsearch (RAG)
+    try:
+        from apps.assistant.rag import indexer_document
+        nb_chunks = indexer_document(document)
+        if nb_chunks > 0:
+            LogAction.objects.create(
+                document=document,
+                type_action=LogAction.TypeAction.MODIFICATION,
+                cause=f"Indexé dans l'assistant IA ({nb_chunks} extraits)",
+                cause_en=f"Indexed in AI assistant ({nb_chunks} chunks)",
+            )
+    except Exception as e:
+        # Non bloquant : le document est valide même si l'indexation ES échoue
+        print(f"⚠️ Indexation ES échouée pour document {document.id} : {e}")
