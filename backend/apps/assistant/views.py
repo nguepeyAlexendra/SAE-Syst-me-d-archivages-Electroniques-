@@ -33,6 +33,36 @@ def _est_un_refus(texte):
     return any(m in t for m in MARQUEURS_REFUS)
 
 
+def _message_service_indisponible(langue):
+    """Message clair et actionnable si Elasticsearch/Ollama est indisponible."""
+    if langue == 'en':
+        return (
+            "I couldn't access the document search engine.\n\n"
+            "Possible causes:\n"
+            "- The search service (Elasticsearch, port 9200) is not running\n"
+            "- The AI service (Ollama, port 11434) is unavailable\n\n"
+            "Meanwhile, you can still ask questions about metadata "
+            "(lists, statistics, authors, dates, formats): these only use the database."
+        )
+    if langue == 'es':
+        return (
+            "No pude acceder al motor de búsqueda de documentos.\n\n"
+            "Causas posibles:\n"
+            "- El servicio de búsqueda (Elasticsearch, puerto 9200) no está iniciado\n"
+            "- El servicio de IA (Ollama, puerto 11434) no está disponible\n\n"
+            "Mientras tanto, puede hacer preguntas sobre metadatos "
+            "(listas, estadísticas, autores, fechas, formatos): solo usan la base de datos."
+        )
+    return (
+        "Je n'ai pas pu accéder au moteur de recherche des documents.\n\n"
+        "Causes possibles :\n"
+        "- Le service de recherche (Elasticsearch, port 9200) n'est pas démarré\n"
+        "- Le service d'IA (Ollama, port 11434) n'est pas disponible\n\n"
+        "En attendant, vous pouvez poser des questions sur les métadonnées "
+        "(listes, statistiques, auteurs, dates, formats) : elles fonctionnent sans ces services."
+    )
+
+
 # ===========================================================================
 # CRUD CONVERSATIONS
 # ===========================================================================
@@ -101,6 +131,11 @@ class MessageListView(APIView):
         msgs = Message.objects.filter(conversation__id=conv_id, conversation__utilisateur=request.user)
         return Response([{"id": m.id, "role": m.role, "contenu": m.contenu, "sources": m.sources} for m in msgs])
 
+
+# ===========================================================================
+# RECHERCHE SÉMANTIQUE PURE (onglet Recherche)
+# ===========================================================================
+
 class RechercheSemantiqueView(APIView):
     """Retourne les chunks les plus pertinents (sans génération LLM)."""
     permission_classes = [IsAuthenticated]
@@ -109,7 +144,11 @@ class RechercheSemantiqueView(APIView):
         q = (request.data.get('question') or '').strip()
         if not q:
             return Response({"erreur": "Champ 'question' requis"}, status=400)
-        chunks = rag.recherche_hybride(q, k=8, user=request.user)
+        try:
+            chunks = rag.recherche_hybride(q, k=8, user=request.user)
+        except Exception as e:
+            print(f"[RAG] Erreur recherche sémantique : {e}")
+            return Response({"erreur": "Service de recherche indisponible", "detail": str(e)}, status=503)
         return Response([{
             "document_id": c.get("document_id"),
             "titre": c.get("titre"),
@@ -117,8 +156,9 @@ class RechercheSemantiqueView(APIView):
             "extrait": c.get("texte", "")[:300],
         } for c in chunks])
 
+
 # ===========================================================================
-# 🧠 POSE UNE QUESTION (routeur METADONNEES / RAG + streaming + post-filtrage)
+# POSE UNE QUESTION (résumé direct / routeur METADONNEES / RAG + streaming)
 # ===========================================================================
 
 class QuestionView(APIView):
@@ -155,32 +195,50 @@ class QuestionView(APIView):
                 conv.save()
 
             prenom = getattr(request.user, 'first_name', '') or request.user.username
+            langue = rag._detecter_langue(question)
 
-            # --- 3. 🧭 ROUTEUR D'INTENTION : métadonnées (BDD) ou contenu (RAG) ---
+            # --- 2bis. Mode RÉSUMÉ DIRECT (documents cochés, IDs fournis) ---
+            doc_ids = data.get('document_ids') or []
+            if isinstance(doc_ids, list) and doc_ids:
+                reponse = rag.resumer_documents(doc_ids, request.user, prenom, question=question, model=model)
+                from apps.documents.models import Document as DocModel
+                sources = [{"document_id": d.id, "titre": d.titre}
+                           for d in DocModel.objects.filter(id__in=doc_ids)]
+                Message.objects.create(conversation=conv, role="assistant", contenu=reponse, sources=sources)
+                return Response({"reponse": reponse, "sources": sources})
+
+            # --- 3. ROUTEUR D'INTENTION : métadonnées (BDD) ou contenu (RAG) ---
             intention = rag.detecter_intention(question)
             print(f"\n[RAG] Intention détectée : {intention} → '{question[:60]}'")
 
             if intention == "METADONNEES":
-                donnees = rag.requete_metadata(question, request.user)
-                print(f"[RAG] Métadonnées : {donnees['total']} docs, filtres={donnees['filtres']}")
-                if donnees['total'] > 0:
+                try:
+                    donnees = rag.requete_metadata(question, request.user)
+                    print(f"[RAG] Métadonnées : total={donnees['total']}, type={donnees.get('type')}, "
+                          f"non_accessibles={donnees.get('non_accessibles')}, filtres={donnees['filtres']}")
+
+                    # ✅ TOUJOURS répondre en métadonnées (même si total = 0 :
+                    # "aucun document" est une réponse valide, pas une erreur)
                     reponse = rag.generer_depuis_donnees(question, donnees, prenom, model=model)
-
-                    # 🆕 Les liens markdown [titre](/documents/X) sont DÉJÀ dans le texte
-                    # → pas besoin de badges sources en bas (ça ferait doublon)
-                    sources = []
-
+                    sources = []  # liens markdown déjà dans le texte
                     Message.objects.create(conversation=conv, role="assistant",
                                            contenu=reponse, sources=sources)
                     return Response({"reponse": reponse, "sources": sources})
-                # Si 0 résultat → on retombe sur le RAG classique
+                except Exception as e:
+                    print(f"[RAG] Erreur métadonnées : {e}")
+                    traceback.print_exc()
+                    # Erreur technique uniquement → on tente le RAG en secours
 
-            # --- 4. 📚 Chemin RAG classique (contenu des documents) ---
-            chunks = rag.recherche_hybride(question, user=request.user)
-            print(f"[RAG] {len(chunks)} chunks trouvés")
+            # --- 4. Chemin RAG classique (contenu des documents) ---
+            try:
+                chunks = rag.recherche_hybride(question, user=request.user)
+                print(f"[RAG] {len(chunks)} chunks trouvés")
+            except Exception as e:
+                print(f"[RAG] Erreur recherche hybride : {e}")
+                chunks = []
 
             if not chunks:
-                reponse = "Je n'ai trouvé aucun document pertinent pour cette question."
+                reponse = _message_service_indisponible(langue)
                 Message.objects.create(conversation=conv, role="assistant", contenu=reponse, sources=[])
                 return Response({"reponse": reponse, "sources": []})
 
@@ -196,7 +254,7 @@ class QuestionView(APIView):
                     }
             sources = list(sources_uniques.values())
 
-            # --- 5. 🌊 Mode STREAMING ---
+            # --- 5. Mode STREAMING ---
             if stream:
                 def generate():
                     full_response = ""
@@ -205,7 +263,6 @@ class QuestionView(APIView):
                             full_response += token
                             yield f"data: {json.dumps({'token': token})}\n\n"
 
-                        # Post-filtrage : refus → pas de sources
                         sources_filtrees = [] if _est_un_refus(full_response) else sources
                         if not sources_filtrees:
                             print("[RAG] Stream : réponse = refus → sources masquées")
@@ -218,10 +275,9 @@ class QuestionView(APIView):
 
                 return StreamingHttpResponse(generate(), content_type='text/event-stream')
 
-            # --- 6. 💬 Mode NORMAL (non streaming) ---
+            # --- 6. Mode NORMAL (non streaming) ---
             reponse = rag.generer(question, chunks, prenom, model=model, temperature=temperature)
 
-            # Post-filtrage : si le LLM avoue ne pas trouver, on masque les sources parasites
             if _est_un_refus(reponse):
                 sources = []
                 print("[RAG] Réponse = refus → sources masquées")
@@ -230,7 +286,7 @@ class QuestionView(APIView):
             return Response({"reponse": reponse, "sources": sources})
 
         except Exception as e:
-            print(f"\n{'!'*60}\n🔥 ERREUR QuestionView :\n{'!'*60}")
+            print(f"\n{'!'*60}\nERREUR QuestionView :\n{'!'*60}")
             traceback.print_exc()
             print(f"{'!'*60}\n")
             return Response({"erreur": f"{type(e).__name__}: {str(e)}"}, status=500)

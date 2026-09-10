@@ -134,8 +134,13 @@ def _filtres_permissions(user):
 
 
 def recherche_hybride(question, k=8, user=None):
-    """Recherche textuelle robuste avec filtres de permissions et seuil de pertinence."""
-    assurer_index()
+    """Recherche textuelle robuste. Résiliente si ES ou Ollama est indisponible."""
+    try:
+        assurer_index()
+    except Exception as e:
+        print(f"[RAG] Elasticsearch indisponible : {e}")
+        return []
+
     filtres = _filtres_permissions(user)
     try:
         body = {
@@ -163,7 +168,6 @@ def recherche_hybride(question, k=8, user=None):
         print(f"[RAG] '{question[:40]}' → 0 chunks")
         return []
 
-    # Seuil relatif : garder seulement les hits >= 55% du meilleur score
     score_max = hits[0].get("_score", 0) or 1
     seuil = score_max * 0.55
 
@@ -305,6 +309,57 @@ MOTS_CLES_METADATA = [
     'pdf',
 ]
 
+def resumer_documents(doc_ids, user, prenom, question="Résume ces documents", model=None):
+    """Résume directement le contenu des documents sélectionnés (par ID)."""
+    docs = list(_qs_docs_pour_user(user).filter(id__in=doc_ids))
+    if not docs:
+        langue = _detecter_langue(question)
+        return ("Aucun document accessible parmi ceux sélectionnés." if langue == 'fr'
+                else "No accessible document among the selected ones.")
+
+    blocs_contexte = []
+    for d in docs[:5]:
+        texte = getattr(d, 'contenu_texte', '') or ''
+        if not texte:
+            try:
+                d.fichier.open('rb')
+                contenu = d.fichier.read()
+                d.fichier.close()
+                texte = extraire_texte(contenu, d.type_mime)
+            except Exception:
+                texte = ''
+        if not texte:
+            texte = f"(document sans texte extractible : {d.titre})"
+        blocs_contexte.append(f"[Document : {d.titre}]\n{texte[:6000]}")
+
+    contexte = "\n\n---\n\n".join(blocs_contexte)
+    langue = _detecter_langue(question)
+
+    if langue == 'en':
+        consigne = f"Summarize the following documents clearly and structurally. User's name: {prenom}. Start with a short introduction."
+    elif langue == 'es':
+        consigne = f"Resume los siguientes documentos de forma clara y estructurada. Nombre del usuario: {prenom}. Empieza con una breve introducción."
+    else:
+        consigne = f"Résume les documents suivants de façon claire et structurée. L'utilisateur s'appelle {prenom}. Commence par une courte phrase d'introduction."
+
+    prompt = f"""{consigne}
+Donne un résumé par document (titre en gras), puis une synthèse globale si pertinent.
+
+DOCUMENTS :
+{contexte}
+
+RÉSUMÉ :
+/no_think"""
+
+    try:
+        r = requests.post(f"{OLLAMA}/api/generate",
+                          json={"model": model or MODEL_DEFAUT, "prompt": prompt, "stream": False,
+                                "options": {"temperature": 0.2, "num_predict": 1024}},
+                          timeout=180)
+        r.raise_for_status()
+        return r.json()["response"]
+    except Exception as e:
+        return f"⚠️ Erreur lors du résumé : {e}"
 
 def _normaliser(texte):
     """Normalise apostrophes, tirets, ponctuation pour les comparaisons."""
@@ -331,6 +386,9 @@ def detecter_intention(question, model=None):
     """Classifie la question : 'METADONNEES' (BDD) ou 'CONTENU' (RAG)."""
     import requests as _req
     q = _normaliser(question)
+        # Commandes de résumé → toujours CONTENU (jamais métadonnées)
+    if q.startswith('resume ces documents') or q.startswith('summarize these documents') or q.startswith('resume los documentos'):
+        return "CONTENU"
 
     if any(_mot_present(m, q) for m in MOTS_CLES_METADATA):
         print(f"[RAG] Routeur : mots-clés → METADONNEES")
@@ -377,106 +435,195 @@ def _qs_docs_pour_user(user):
     )
     return qs.distinct()
 
-
 def requete_metadata(question, user):
-    """Interroge la base Django selon les filtres détectés dans la question."""
-    from django.db.models import Q
+    """Extraction LLM + requête BDD. Pour le COMPTAGE, compte TOUT (transparence)."""
+    import requests as _req
+    from django.db.models import Q, Count
     from apps.documents.models import Departement, Document
     from django.contrib.auth.models import User as DjangoUser
     from datetime import date as _date, timedelta as _td
 
-    q = _normaliser(question)
-    mots = q.split()
-    qs = _qs_docs_pour_user(user)
+    # 1. Extraction des filtres par le LLM
+    prompt_extraction = f"""Tu es un extracteur de filtres. Analyse la question et retourne UNIQUEMENT un JSON :
+
+{{
+  "periode": "ce_mois" | "mois_dernier" | "cette_semaine" | "aujourd_hui" | "cette_annee" | null,
+  "mois": "janvier" | ... | null,
+  "annee": 2024 | 2025 | 2026 | null,
+  "statut": "rejete" | "valide" | "en_cours" | null,
+  "format": "PowerPoint" | "Excel" | "Word" | "PDF" | null,
+  "groupe": "images" | "medias" | null,
+  "departement": "nom exact" | null,
+  "auteur": "username exact" | null,
+  "confidentiel": true | false | null,
+  "type_question": "classement_auteurs" | "liste" | "comptage"
+}}
+
+Règles :
+- "qui a déposé le plus" / "top contributeurs" → classement_auteurs
+- "combien de" / "nombre de" / "how many" → comptage
+- "documents confidentiels" → confidentiel: true
+- "ce mois" → periode: ce_mois
+- Retourne UNIQUEMENT le JSON
+
+Question : {question}
+
+JSON :
+/no_think"""
+
+    try:
+        r = _req.post(f"{OLLAMA}/api/generate",
+                      json={"model": MODEL_DEFAUT, "prompt": prompt_extraction, "stream": False,
+                            "options": {"temperature": 0.0, "num_predict": 200}},
+                      timeout=30)
+        reponse_brute = r.json().get("response", "").strip()
+        if reponse_brute.startswith("```"):
+            reponse_brute = reponse_brute.split("```")[1]
+            if reponse_brute.startswith("json"):
+                reponse_brute = reponse_brute[4:]
+        filtres_llm = json.loads(reponse_brute)
+        print(f"[RAG] Filtres extraits : {filtres_llm}")
+    except Exception as e:
+        print(f"[RAG] Erreur extraction : {e}")
+        filtres_llm = {}
+
+    # 2. Construire les QuerySets
+    auj = _date.today()
+    
+    # qs_total = TOUS les documents (sans permissions) — pour le COMPTAGE
+    # qs_user = documents accessibles — pour la LISTE
+    qs_total = Document.objects.filter(est_supprime=False)
+    qs_user = _qs_docs_pour_user(user)
     filtres = {}
 
-    auj = _date.today()
+    # Application des filtres sur les 2 querysets
+    def appliquer_filtres(qs):
+        periode = filtres_llm.get('periode')
+        if periode == 'ce_mois':
+            qs = qs.filter(date_depot__month=auj.month, date_depot__year=auj.year)
+            filtres['periode'] = 'ce_mois'
+            filtres['mois'] = NOMS_MOIS_FR[auj.month]
+            filtres['annee'] = auj.year
+        elif periode == 'mois_dernier':
+            prec = auj.replace(day=1) - _td(days=1)
+            qs = qs.filter(date_depot__month=prec.month, date_depot__year=prec.year)
+            filtres['periode'] = 'mois_dernier'
+            filtres['mois'] = NOMS_MOIS_FR[prec.month]
+            filtres['annee'] = prec.year
+        elif periode == 'cette_semaine':
+            debut = auj - _td(days=auj.weekday())
+            qs = qs.filter(date_depot__date__gte=debut)
+            filtres['periode'] = 'cette_semaine'
+        elif periode == 'aujourd_hui':
+            qs = qs.filter(date_depot__date=auj)
+            filtres['periode'] = 'aujourd_hui'
+        elif periode == 'cette_annee':
+            qs = qs.filter(date_depot__year=auj.year)
+            filtres['annee'] = auj.year
+            filtres['periode'] = 'cette_annee'
 
-    # Périodes relatives (prioritaires sur les noms de mois)
-    if 'ce mois' in q or 'mois courant' in q or 'this month' in q or 'current month' in q:
-        qs = qs.filter(date_depot__month=auj.month, date_depot__year=auj.year)
-        filtres['mois'] = NOMS_MOIS_FR[auj.month]
-        filtres['annee'] = auj.year
-        filtres['periode'] = 'ce_mois'
-    elif 'mois dernier' in q or 'last month' in q:
-        prec = auj.replace(day=1) - _td(days=1)
-        qs = qs.filter(date_depot__month=prec.month, date_depot__year=prec.year)
-        filtres['mois'] = NOMS_MOIS_FR[prec.month]
-        filtres['annee'] = prec.year
-        filtres['periode'] = 'mois_dernier'
-    elif 'cette semaine' in q or 'this week' in q:
-        debut = auj - _td(days=auj.weekday())
-        qs = qs.filter(date_depot__date__gte=debut)
-        filtres['periode'] = 'cette_semaine'
-    elif 'aujourd hui' in q or 'today' in q:
-        qs = qs.filter(date_depot__date=auj)
-        filtres['periode'] = 'aujourd_hui'
-    elif 'cette annee' in q or 'this year' in q:
-        qs = qs.filter(date_depot__year=auj.year)
-        filtres['annee'] = auj.year
-        filtres['periode'] = 'cette_annee'
-    else:
-        # Noms de mois explicites (juillet, août...)
-        for nom, num in MOIS.items():
-            if nom in mots:
-                qs = qs.filter(date_depot__month=num)
-                filtres['mois'] = nom
-                break
+        if 'mois' in filtres_llm and filtres_llm['mois'] and 'periode' not in filtres:
+            mois_nom = filtres_llm['mois']
+            if mois_nom in MOIS:
+                qs = qs.filter(date_depot__month=MOIS[mois_nom])
+                filtres['mois'] = mois_nom
 
-    # Année explicite (si pas déjà déduite de la période relative)
-    if 'annee' not in filtres:
-        m = re.search(r"\b(20\d{2})\b", q)
-        if m:
-            qs = qs.filter(date_depot__year=int(m.group(1)))
-            filtres['annee'] = int(m.group(1))
+        if 'annee' in filtres_llm and filtres_llm['annee'] and 'annee' not in filtres:
+            qs = qs.filter(date_depot__year=filtres_llm['annee'])
+            filtres['annee'] = filtres_llm['annee']
 
-    # Statut
-    if 'rejet' in q:
-        qs = qs.filter(statut='rejete'); filtres['statut'] = 'rejete'
-    elif 'valid' in q or 'accept' in q:
-        qs = qs.filter(statut='valide'); filtres['statut'] = 'valide'
-    elif 'en cours' in q or 'attente' in q or 'pending' in q:
-        qs = qs.filter(statut='en_cours'); filtres['statut'] = 'en_cours'
+        if filtres_llm.get('statut'):
+            qs = qs.filter(statut=filtres_llm['statut'])
+            filtres['statut'] = filtres_llm['statut']
 
-    # Format spécifique (PowerPoint, Excel, Word, PDF) — détection par racine
-    if _contient(q, 'powerpoint') or 'pptx' in mots or _contient(q, 'presentation') or _contient(q, 'présentation'):
-        qs = qs.filter(Q(type_mime__icontains='presentation') | Q(type_mime__icontains='powerpoint'))
-        filtres['format'] = 'PowerPoint'
-    elif _contient(q, 'excel') or 'xlsx' in mots or 'tableur' in mots or _contient(q, 'spreadsheet'):
-        qs = qs.filter(Q(type_mime__icontains='spreadsheet') | Q(type_mime__icontains='excel'))
-        filtres['format'] = 'Excel'
-    elif _contient(q, 'word') or 'docx' in mots:
-        qs = qs.filter(Q(type_mime__icontains='wordprocessing') | Q(type_mime__icontains='msword'))
-        filtres['format'] = 'Word'
-    elif re.search(r"\bpdf\b", q):
-        qs = qs.filter(type_mime='application/pdf')
-        filtres['format'] = 'PDF'
-    # Groupe (images / scans / médias) — détection par racine (matche singulier ET pluriel)
-    elif _contient(q, 'image') or _contient(q, 'photo') or _contient(q, 'scan'):
-        qs = qs.filter(Q(groupe='images') | Q(type_source='scan'))
-        filtres['groupe'] = 'images+scans'
-    elif _contient(q, 'vidéo') or _contient(q, 'video') or _contient(q, 'audio') or _contient(q, 'média') or _contient(q, 'media'):
-        qs = qs.filter(groupe='medias')
-        filtres['groupe'] = 'medias'
+        fmt = filtres_llm.get('format')
+        if fmt:
+            if fmt == 'PowerPoint':
+                qs = qs.filter(Q(type_mime__icontains='presentation') | Q(type_mime__icontains='powerpoint'))
+            elif fmt == 'Excel':
+                qs = qs.filter(Q(type_mime__icontains='spreadsheet') | Q(type_mime__icontains='excel'))
+            elif fmt == 'Word':
+                qs = qs.filter(Q(type_mime__icontains='wordprocessing') | Q(type_mime__icontains='msword'))
+            elif fmt == 'PDF':
+                qs = qs.filter(type_mime='application/pdf')
+            filtres['format'] = fmt
 
-    # Département
-    for dept in Departement.objects.all():
-        if dept.nom.lower() in q:
-            qs = qs.filter(departement=dept)
-            filtres['departement'] = dept.nom
-            break
+        groupe = filtres_llm.get('groupe')
+        if groupe:
+            if groupe == 'images':
+                qs = qs.filter(Q(groupe='images') | Q(type_source='scan'))
+                filtres['groupe'] = 'images+scans'
+            elif groupe == 'medias':
+                qs = qs.filter(groupe='medias')
+                filtres['groupe'] = 'medias'
 
-    # Auteur
-    for u in DjangoUser.objects.filter(is_active=True):
-        if u.username.lower() in q or (u.first_name and u.first_name.lower() in q):
-            qs = qs.filter(depose_par=u)
-            filtres['auteur'] = u.username
-            break
+        if filtres_llm.get('departement'):
+            try:
+                dept = Departement.objects.get(nom=filtres_llm['departement'])
+                qs = qs.filter(departement=dept)
+                filtres['departement'] = dept.nom
+            except Departement.DoesNotExist:
+                pass
 
-    qs = qs.order_by('-date_depot')
-    total = qs.count()
-    type_question = 'comptage' if any(m in q for m in ['combien', 'nombre', 'how many', 'cuántos', 'cuantos']) else 'liste'
+        if filtres_llm.get('auteur'):
+            try:
+                u = DjangoUser.objects.get(username=filtres_llm['auteur'])
+                qs = qs.filter(depose_par=u)
+                filtres['auteur'] = u.username
+            except DjangoUser.DoesNotExist:
+                pass
 
+        # Confidentiel : important de l'appliquer (sinon ça fausse le comptage)
+        if filtres_llm.get('confidentiel') is not None:
+            qs = qs.filter(est_confidentiel=filtres_llm['confidentiel'])
+            filtres['confidentiel'] = filtres_llm['confidentiel']
+        
+        return qs
+
+    qs_total = appliquer_filtres(qs_total)
+    qs_user = appliquer_filtres(qs_user)
+
+    # 3. Type de question
+    type_question = filtres_llm.get('type_question', 'liste')
+
+    # ===== CLASSEMENT AUTEURS (toujours sur qs_total pour transparence) =====
+    if type_question == 'classement_auteurs':
+        classement = list(qs_user.values(
+            'depose_par__username', 'depose_par__first_name',
+        ).annotate(count=Count('id')).order_by('-count')[:10])
+        
+        documents = [{
+            'rang': i + 1,
+            'auteur': (a['depose_par__first_name'] or a['depose_par__username'] or 'Inconnu'),
+            'username': a['depose_par__username'] or 'Inconnu',
+            'count': a['count'],
+        } for i, a in enumerate(classement)]
+        
+        return {
+            'type': 'classement',
+            'total': sum(a['count'] for a in classement),
+            'non_accessibles': 0,
+            'filtres': filtres,
+            'documents': documents,
+        }
+
+    # ===== COMPTE TOTAL (sur qs_total pour transparence) =====
+    total = qs_total.count()
+    accessibles = qs_user.count()
+    non_accessibles = max(total - accessibles, 0)
+
+    if type_question == 'comptage':
+        # Pour le comptage, on retourne juste le total + info accessibilité
+        return {
+            'type': 'comptage',
+            'total': total,
+            'non_accessibles': non_accessibles,
+            'filtres': filtres,
+            'documents': [],
+        }
+
+    # ===== LISTE (seulement les accessibles) =====
+    qs_user = qs_user.order_by('-date_depot')
     documents = [{
         'document_id': d.id,
         'titre': d.titre,
@@ -485,66 +632,15 @@ def requete_metadata(question, user):
         'departement': d.departement.nom if d.departement else 'N/A',
         'statut': d.statut,
         'groupe': d.groupe,
-    } for d in qs[:100]]
-
-    # Compter les documents masqués par les permissions (transparence sans fuite)
-    try:
-        qs_brut = Document.objects.filter(est_supprime=False)
-        
-        # Appliquer les mêmes filtres de période relative
-        if 'periode' in filtres:
-            periode = filtres['periode']
-            if periode == 'ce_mois':
-                qs_brut = qs_brut.filter(date_depot__month=auj.month, date_depot__year=auj.year)
-            elif periode == 'mois_dernier':
-                prec = auj.replace(day=1) - _td(days=1)
-                qs_brut = qs_brut.filter(date_depot__month=prec.month, date_depot__year=prec.year)
-            elif periode == 'cette_semaine':
-                debut = auj - _td(days=auj.weekday())
-                qs_brut = qs_brut.filter(date_depot__date__gte=debut)
-            elif periode == 'aujourd_hui':
-                qs_brut = qs_brut.filter(date_depot__date=auj)
-            elif periode == 'cette_annee':
-                qs_brut = qs_brut.filter(date_depot__year=auj.year)
-        else:
-            if 'mois' in filtres:
-                qs_brut = qs_brut.filter(date_depot__month=MOIS[filtres['mois']])
-            if 'annee' in filtres:
-                qs_brut = qs_brut.filter(date_depot__year=filtres['annee'])
-        
-        if 'statut' in filtres:
-            qs_brut = qs_brut.filter(statut=filtres['statut'])
-        if 'format' in filtres:
-            fmt = filtres['format']
-            if fmt == 'PowerPoint':
-                qs_brut = qs_brut.filter(Q(type_mime__icontains='presentation') | Q(type_mime__icontains='powerpoint'))
-            elif fmt == 'Excel':
-                qs_brut = qs_brut.filter(Q(type_mime__icontains='spreadsheet') | Q(type_mime__icontains='excel'))
-            elif fmt == 'Word':
-                qs_brut = qs_brut.filter(Q(type_mime__icontains='wordprocessing') | Q(type_mime__icontains='msword'))
-            elif fmt == 'PDF':
-                qs_brut = qs_brut.filter(type_mime='application/pdf')
-        elif filtres.get('groupe') == 'images+scans':
-            qs_brut = qs_brut.filter(Q(groupe='images') | Q(type_source='scan'))
-        elif filtres.get('groupe') == 'medias':
-            qs_brut = qs_brut.filter(groupe='medias')
-        if 'auteur' in filtres:
-            qs_brut = qs_brut.filter(depose_par__username=filtres['auteur'])
-        if 'departement' in filtres:
-            qs_brut = qs_brut.filter(departement__nom=filtres['departement'])
-        non_accessibles = max(qs_brut.count() - total, 0)
-    except Exception:
-        non_accessibles = 0
+    } for d in qs_user[:100]]
 
     return {
-        'type': type_question,
-        'total': total,
+        'type': 'liste',
+        'total': accessibles,
         'non_accessibles': non_accessibles,
         'filtres': filtres,
         'documents': documents,
     }
-
-
 # ===========================================================================
 # RÉPONSES STRUCTURÉES POUR MÉTADONNÉES (listes, intros contextuelles)
 # ===========================================================================
@@ -770,17 +866,62 @@ def _generer_intro_contextuelle(question, donnees, prenom, labels, langue):
 
 
 def generer_depuis_donnees(question, donnees, prenom, model=None):
-    """Format vertical complet avec intro contextuelle et titres cliquables."""
+    """Génère la réponse selon le type : classement, comptage, ou liste."""
     total = donnees['total']
     docs = donnees['documents']
+    type_q = donnees.get('type', 'liste')
 
     langue = _detecter_langue(question)
     labels = _get_labels(langue)
 
+    # ===== TYPE CLASSEMENT (top auteurs) =====
+        # ===== TYPE COMPTE SIMPLE (combien de...) =====
+    if type_q == 'comptage':
+        intro = _generer_intro_contextuelle(question, donnees, prenom, labels, langue)
+        if total == 0:
+            msgs = {
+                'fr': f"Il n'y a **aucun** document correspondant à votre recherche.",
+                'en': f"There are **no** documents matching your search.",
+                'es': f"No hay **ningún** documento que coincida con su búsqueda.",
+            }
+        else:
+            msgs = {
+                'fr': f"Il y a **{total}** document(s) correspondant à votre recherche.",
+                'en': f"There are **{total}** document(s) matching your search.",
+                'es': f"Hay **{total}** documento(s) que coinciden con su búsqueda.",
+            }
+        blocs = [intro, msgs.get(langue, msgs['fr'])]
+
+        if non_accessibles := donnees.get('non_accessibles'):
+            raisons = _analyser_raisons_masquage(donnees.get('filtres', {}), langue)
+            blocs.append(
+                f"- {non_accessibles} {labels['non_accessibles']} :\n\n{raisons}\n\n"
+                f"**{labels['conseil']}** : {labels['conseil_texte']}"
+            )
+        return "\n\n".join(blocs)
+
+    # ===== TYPE COMPTE SIMPLE (combien de...) =====
+    if type_q == 'comptage':
+        intro = _generer_intro_contextuelle(question, donnees, prenom, labels, langue)
+        msgs = {
+            'fr': f"Il y a **{total}** document(s) correspondant à votre recherche.",
+            'en': f"There are **{total}** document(s) matching your search.",
+            'es': f"Hay **{total}** documento(s) que coinciden con su búsqueda.",
+        }
+        blocs = [intro, msgs.get(langue, msgs['fr'])]
+
+        if donnees.get('non_accessibles'):
+            raisons = _analyser_raisons_masquage(donnees.get('filtres', {}), langue)
+            blocs.append(
+                f"- {donnees['non_accessibles']} {labels['non_accessibles']} :\n\n{raisons}\n\n"
+                f"**{labels['conseil']}** : {labels['conseil_texte']}"
+            )
+        return "\n\n".join(blocs)
+
+    # ===== TYPE LISTE (défaut) =====
     intro = _generer_intro_contextuelle(question, donnees, prenom, labels, langue)
     blocs = [intro]
 
-    # Liste avec titres cliquables (markdown link)
     for d in docs:
         lien = f"/documents/{d['document_id']}"
         blocs.append(
