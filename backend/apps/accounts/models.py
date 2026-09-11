@@ -6,6 +6,15 @@ from django.utils import timezone
 from apps.documents.models import Departement
 
 
+# Ajout du champ 'nom' (nom complet) via une propriété sur User
+def user_nom(self):
+    """Retourne le nom complet (prénom + nom) ou username si vide."""
+    full_name = self.get_full_name().strip()
+    return full_name if full_name else self.username
+
+User.add_to_class('nom', property(user_nom))
+
+
 class DomaineEmail(models.Model):
     """Modèle pour gérer les domaines d'email autorisés de manière individuelle."""
     domaine = models.CharField(
@@ -168,3 +177,32 @@ class AppareilApprouve(models.Model):
 def creer_profil_utilisateur(sender, instance, created, **kwargs):
     if created:
         ProfilUtilisateur.objects.create(utilisateur=instance)
+
+        # ==========================================
+# MODÈLE : Limite de connexions simultanées (max 3 appareils)
+# ==========================================
+class SessionAppareil(models.Model):
+    """
+    Trace chaque appareil connecté avec son Token DRF.
+    Limite : MAX_APPAREILS_PAR_UTILISATEUR connexions simultanées par user.
+    Quand la limite est atteinte, la session la plus ancienne est déconnectée.
+    """
+    utilisateur = models.ForeignKey(
+        User, on_delete=models.CASCADE, related_name='sessions_appareils'
+    )
+    token = models.OneToOneField(
+        'authtoken.Token', on_delete=models.CASCADE, related_name='session'
+    )
+    appareil = models.CharField(max_length=255, blank=True, default='')
+    ip = models.GenericIPAddressField(null=True, blank=True)
+    cree_le = models.DateTimeField(auto_now_add=True)
+    derniere_activite = models.DateTimeField(auto_now=True)
+    est_active = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ['-cree_le']
+        verbose_name = "Session appareil"
+        verbose_name_plural = "Sessions appareils"
+
+    def __str__(self):
+        return f"{self.utilisateur.username} — {self.appareil[:30] or 'Appareil inconnu'}"

@@ -17,7 +17,10 @@ from rest_framework.views import APIView
 
 from apps.documents.models import ConnexionLog
 
-from .models import ConfigurationConnexion, ProfilUtilisateur, DomaineEmail, Departement, AppareilApprouve
+from .models import (
+    ConfigurationConnexion, ProfilUtilisateur, DomaineEmail,
+    Departement, AppareilApprouve, SessionAppareil,
+)
 from .serializers import (
     ChangerMotDePasseSerializer,
     ConfigurationConnexionSerializer,
@@ -156,6 +159,41 @@ RESET_EMAIL_HTML_TEMPLATE = """
 """
 
 
+# ===========================================================================
+# HELPER : Gestion de la limite de 3 appareils par utilisateur
+# ===========================================================================
+def _creer_session_limitee(utilisateur, token, request):
+    """
+    Gère la limite de connexions simultanées et évite les erreurs de clé unique.
+    """
+    # 1. Mettre à jour ou créer la session pour ce token spécifique
+    # Cela évite l'erreur "UNIQUE constraint failed" si la session existe déjà
+    SessionAppareil.objects.update_or_create(
+        token=token,  # Clé de recherche unique
+        defaults={
+            'utilisateur': utilisateur,
+            'appareil': request.META.get('HTTP_USER_AGENT', 'Inconnu')[:255],
+            'ip': request.META.get('REMOTE_ADDR', '127.0.0.1'),
+            'est_active': True
+        }
+    )
+
+    # 2. Vérifier la limite d'appareils (ex: max 3)
+    MAX_APPAREILS = 3
+    sessions_actives = SessionAppareil.objects.filter(
+        utilisateur=utilisateur, 
+        est_active=True
+    ).order_by('-cree_le')
+    
+    if sessions_actives.count() > MAX_APPAREILS:
+        # Désactiver les sessions les plus anciennes au-delà de la limite
+        sessions_a_desactiver = sessions_actives[MAX_APPAREILS:]
+        for session in sessions_a_desactiver:
+            session.est_active = False
+            session.save()
+# ===========================================================================
+# VÉRIFICATION EMAIL
+# ===========================================================================
 class VerifierEmailView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -165,8 +203,11 @@ class VerifierEmailView(APIView):
         serializer.is_valid(raise_exception=True)
         email_valide = serializer.verifier()
         return Response({"email_valide": email_valide}, status=status.HTTP_200_OK)
-    
 
+
+# ===========================================================================
+# CONNEXION (avec 2FA optionnel + limite d'appareils)
+# ===========================================================================
 class LoginView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -179,24 +220,17 @@ class LoginView(APIView):
         if erreur:
             return Response({"erreur": erreur}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # ==========================================
-        # DÉCISION : LE 2FA EST-IL REQUIS ?
-        # ==========================================
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=utilisateur)
         config = ConfigurationConnexion.get_configuration()
-        
+
         deux_fa_requis = False
-        
-        # Règle 1 : Les admins ont TOUJOURS le 2FA
         if utilisateur.is_staff:
             deux_fa_requis = True
-        # Règle 2 : L'admin a imposé le 2FA à tout le monde
         elif config.two_fa_obligatoire:
             deux_fa_requis = True
-        # Règle 3 : L'utilisateur a activé le 2FA lui-même
         elif profil.two_fa_active:
             deux_fa_requis = True
-        
+
         # ==========================================
         # SI LE 2FA EST REQUIS
         # ==========================================
@@ -206,13 +240,14 @@ class LoginView(APIView):
             if trusted_device_token:
                 try:
                     appareil = AppareilApprouve.objects.get(
-                        token=trusted_device_token, 
+                        token=trusted_device_token,
                         utilisateur=utilisateur
                     )
                     if appareil.est_valide():
                         # Appareil approuvé → connexion directe sans 2FA
                         token, _ = Token.objects.get_or_create(user=utilisateur)
-                        
+                        _creer_session_limitee(utilisateur, token, request)  # 🆕 LIMITE APPAREILS
+
                         try:
                             ip = request.META.get('REMOTE_ADDR', '')
                             ua = request.META.get('HTTP_USER_AGENT', '')
@@ -256,26 +291,23 @@ class LoginView(APIView):
                     profil.nb_codes_envoyes_heure = 1
             else:
                 profil.nb_codes_envoyes_heure = 1
-            
+
             profil.date_derniere_demande_code = timezone.now()
 
             # Générer le code et le token temporaire
             code = str(secrets.randbelow(1000000)).zfill(6)
             temp_token = secrets.token_urlsafe(32)
-            
-            # Sauvegarder en base
+
             profil.code_2fa = code
             profil.code_2fa_expiration = timezone.now() + timedelta(minutes=5)
             profil.token_2fa_temporaire = temp_token
             profil.tentatives_2fa_echouees = 0
             profil.save()
 
-            # Afficher dans le terminal pour les tests
-            print("\n" + "="*60)
+            print("\n" + "=" * 60)
             print(f"🔐 [CODE 2FA] Pour {utilisateur.email} : {code}")
-            print("="*60 + "\n")
+            print("=" * 60 + "\n")
 
-            # Envoyer par email
             try:
                 send_mail(
                     'Code de vérification SAE',
@@ -287,7 +319,6 @@ class LoginView(APIView):
             except Exception:
                 pass
 
-            # Renvoyer le token temporaire au frontend
             return Response({
                 "status": "2fa_required",
                 "temp_token": temp_token,
@@ -297,6 +328,7 @@ class LoginView(APIView):
         # CONNEXION CLASSIQUE (sans 2FA)
         # ==========================================
         token, _ = Token.objects.get_or_create(user=utilisateur)
+        _creer_session_limitee(utilisateur, token, request)  # 🆕 LIMITE APPAREILS
 
         try:
             ip = request.META.get('REMOTE_ADDR', '')
@@ -332,6 +364,9 @@ class LoginView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+# ===========================================================================
+# VÉRIFICATION 2FA
+# ===========================================================================
 class Verify2FAView(APIView):
     permission_classes = [AllowAny]
     authentication_classes = []
@@ -349,7 +384,6 @@ class Verify2FAView(APIView):
         except ProfilUtilisateur.DoesNotExist:
             return Response({"erreur": "Session de vérification invalide ou expirée."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # VÉRIFICATION 1 : Le compte est-il déjà bloqué ?
         if profil.tentatives_2fa_echouees >= 3:
             profil.code_2fa = None
             profil.code_2fa_expiration = None
@@ -360,7 +394,6 @@ class Verify2FAView(APIView):
                 "erreur": "Trop de tentatives échouées. Veuillez vous reconnecter depuis le début."
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
-        # VÉRIFICATION 2 : Le code est-il expiré ?
         if timezone.now() > profil.code_2fa_expiration:
             profil.code_2fa = None
             profil.code_2fa_expiration = None
@@ -369,11 +402,10 @@ class Verify2FAView(APIView):
             profil.save()
             return Response({"erreur": "Le code a expiré. Veuillez vous reconnecter."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # VÉRIFICATION 3 : Le code est-il incorrect ?
         if profil.code_2fa != code:
             profil.tentatives_2fa_echouees += 1
             profil.save()
-            
+
             tentatives_restantes = 3 - profil.tentatives_2fa_echouees
             if tentatives_restantes > 0:
                 return Response({
@@ -393,18 +425,16 @@ class Verify2FAView(APIView):
         # SUCCÈS : GÉNÉRATION DU VRAI TOKEN
         # ==========================================
         utilisateur = profil.utilisateur
-        
-        # Nettoyage complet
+
         profil.code_2fa = None
         profil.code_2fa_expiration = None
         profil.token_2fa_temporaire = None
         profil.tentatives_2fa_echouees = 0
         profil.save()
 
-        # Création du token final
         token, _ = Token.objects.get_or_create(user=utilisateur)
+        _creer_session_limitee(utilisateur, token, request)  # 🆕 LIMITE APPAREILS
 
-        # Si "Se souvenir de cet appareil" est coché
         trusted_device_token = None
         if se_souvenir_appareil:
             trusted_device_token = secrets.token_urlsafe(48)
@@ -416,7 +446,6 @@ class Verify2FAView(APIView):
                 date_expiration=timezone.now() + timedelta(days=30)
             )
 
-        # Log de connexion
         try:
             ip = request.META.get('REMOTE_ADDR', '')
             ua = request.META.get('HTTP_USER_AGENT', '')
@@ -424,7 +453,6 @@ class Verify2FAView(APIView):
         except Exception:
             pass
 
-        # Préparation des données utilisateur
         changement_mdp_obligatoire = profil.changement_mdp_obligatoire
         photo_url = profil.photo.url if profil.photo else None
         departement_data = None
@@ -444,15 +472,16 @@ class Verify2FAView(APIView):
             }
         }
 
-        # Ajouter le token de l'appareil approuvé si demandé
         if trusted_device_token:
             response_data["trusted_device_token"] = trusted_device_token
 
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+# ===========================================================================
+# RENVOI CODE 2FA
+# ===========================================================================
 class Resend2FAView(APIView):
-    """Régénère et renvoie un nouveau code 2FA pour un token temporaire encore valide."""
     permission_classes = [AllowAny]
     authentication_classes = []
 
@@ -467,7 +496,6 @@ class Resend2FAView(APIView):
         except ProfilUtilisateur.DoesNotExist:
             return Response({"erreur": "Session de vérification invalide ou expirée."}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Trop de tentatives : tout nettoyer et obliger à se reconnecter
         if profil.tentatives_2fa_echouees >= 3:
             profil.code_2fa = None
             profil.code_2fa_expiration = None
@@ -478,7 +506,6 @@ class Resend2FAView(APIView):
                 "erreur": "Trop de tentatives échouées. Veuillez vous reconnecter depuis le début."
             }, status=status.HTTP_429_TOO_MANY_REQUESTS)
 
-        # Rate Limiting (max 3 codes par heure, partagé avec LoginView)
         if profil.date_derniere_demande_code:
             temps_ecoule = timezone.now() - profil.date_derniere_demande_code
             if temps_ecoule < timedelta(hours=1):
@@ -494,7 +521,6 @@ class Resend2FAView(APIView):
 
         profil.date_derniere_demande_code = timezone.now()
 
-        # Générer un nouveau code (le temp_token reste identique)
         code = str(secrets.randbelow(1000000)).zfill(6)
         profil.code_2fa = code
         profil.code_2fa_expiration = timezone.now() + timedelta(minutes=5)
@@ -518,13 +544,15 @@ class Resend2FAView(APIView):
         return Response({"succes": True, "message": "Code renvoyé."}, status=status.HTTP_200_OK)
 
 
+# ===========================================================================
+# CONFIGURATION CONNEXION
+# ===========================================================================
 class ConfigurationConnexionView(generics.RetrieveUpdateAPIView):
     serializer_class = ConfigurationConnexionSerializer
 
     def get_object(self):
         return ConfigurationConnexion.get_configuration()
 
-    # ✅ Permissions dynamiques : lecture pour tous, écriture pour admin uniquement
     def get_permissions(self):
         if self.request.method in ['GET', 'HEAD', 'OPTIONS']:
             return [permissions.IsAuthenticated()]
@@ -533,17 +561,23 @@ class ConfigurationConnexionView(generics.RetrieveUpdateAPIView):
     def perform_update(self, serializer):
         serializer.save(modifie_par=self.request.user)
 
-        
+
+# ===========================================================================
+# PROFIL
+# ===========================================================================
 class ProfilView(generics.RetrieveUpdateAPIView):
     serializer_class = ProfilSerializer
     permission_classes = [permissions.IsAuthenticated]
-    # ✅ AJOUT de JSONParser pour accepter les requêtes JSON (comme le toggle 2FA)
     parser_classes = [parsers.JSONParser, parsers.MultiPartParser, parsers.FormParser]
 
     def get_object(self):
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=self.request.user)
         return profil
-    
+
+
+# ===========================================================================
+# CHANGEMENT MOT DE PASSE
+# ===========================================================================
 class ChangerMotDePasseView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -571,17 +605,78 @@ class ChangerMotDePasseView(APIView):
         return Response({"succes": True}, status=status.HTTP_200_OK)
 
 
+# ===========================================================================
+# DÉCONNEXION (invalide la session courante + supprime le token)
+# ===========================================================================
+class DeconnexionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        try:
+            session = SessionAppareil.objects.filter(
+                utilisateur=request.user,
+                token__key=request.auth.key
+            ).first()
+            if session:
+                session.est_active = False
+                session.save()
+
+            Token.objects.filter(user=request.user, key=request.auth.key).delete()
+        except Exception:
+            pass
+
+        return Response({"succes": True}, status=status.HTTP_200_OK)
+
+
+# ===========================================================================
+# MES SESSIONS (liste + suppression à distance)
+# ===========================================================================
+class MesSessionsView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        sessions = SessionAppareil.objects.filter(
+            utilisateur=request.user, est_active=True
+        ).order_by('-cree_le')
+
+        token_actuel = request.auth.key if request.auth else None
+
+        return Response([{
+            "id": s.id,
+            "appareil": s.appareil or "Appareil inconnu",
+            "ip": s.ip,
+            "cree_le": s.cree_le.isoformat(),
+            "derniere_activite": s.derniere_activite.isoformat(),
+            "est_cet_appareil": s.token.key == token_actuel,
+        } for s in sessions])
+
+    def delete(self, request, pk):
+        try:
+            session = SessionAppareil.objects.get(pk=pk, utilisateur=request.user)
+            session.est_active = False
+            session.save()
+            try:
+                session.token.delete()
+            except Exception:
+                pass
+            return Response({"succes": True})
+        except SessionAppareil.DoesNotExist:
+            return Response({"erreur": "Session introuvable."}, status=404)
+
+
+# ===========================================================================
+# ADMIN : UTILISATEURS
+# ===========================================================================
 class AdminUserListView(generics.ListCreateAPIView):
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
-        return User.objects.filter(is_superuser=False).order_by('username')
+        # TOUS les utilisateurs, y compris le superadmin
+        return User.objects.all().order_by('username')
 
     def get(self, request):
-        users = self.get_queryset()
         result = []
-        for u in users:
-            connexions = ConnexionLog.objects.filter(utilisateur=u).values('ip_address', 'user_agent', 'date_connexion')[:5]
+        for u in self.get_queryset():
             dept = None
             try:
                 if hasattr(u, 'profil') and u.profil.departement:
@@ -594,28 +689,39 @@ class AdminUserListView(generics.ListCreateAPIView):
                     photo_url = u.profil.photo.url
             except Exception:
                 pass
+
+            nom_complet = f"{u.first_name} {u.last_name}".strip() or u.username
+
             result.append({
                 "id": u.id,
                 "username": u.username,
+                "nom_complet": nom_complet,
                 "email": u.email,
                 "est_admin": u.is_staff,
+                "est_superuser": u.is_superuser,
                 "est_actif": u.is_active,
                 "photo": photo_url,
-                "appareils": list(connexions),
                 "departement": dept,
             })
         return Response(result)
 
     def post(self, request):
-        username = request.data.get('username', '').strip()
+        nom = request.data.get('nom', '').strip()
         email = request.data.get('email', '').strip()
         departement_id = request.data.get('departement_id')
-        
-        if not username or not email:
-            return Response({"erreur": "Nom d'utilisateur et email requis."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if User.objects.filter(Q(username__iexact=username) | Q(email__iexact=email)).exists():
-            return Response({"erreur": "Nom d'utilisateur ou email déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST)
+        if not nom or not email:
+            return Response({"erreur": "Nom et email requis."}, status=status.HTTP_400_BAD_REQUEST)
+        if User.objects.filter(email__iexact=email).exists():
+            return Response({"erreur": "Email déjà utilisé."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Username généré automatiquement depuis l'email
+        base = email.split('@')[0].lower().replace('.', '_').replace(' ', '_')
+        username = base
+        suffixe = 1
+        while User.objects.filter(username__iexact=username).exists():
+            suffixe += 1
+            username = f"{base}{suffixe}"
 
         departement = None
         if departement_id:
@@ -627,24 +733,27 @@ class AdminUserListView(generics.ListCreateAPIView):
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         password = ''.join(secrets.choice(alphabet) for _ in range(12))
 
-        print("\n" + "="*60)
+        print("\n" + "=" * 60)
         print(f" NOUVEAU MOT DE PASSE GÉNÉRÉ pour {username} : {password}")
-        print("="*60 + "\n")
-        
-        user = User.objects.create_user(username=username, email=email, password=password, is_active=True)
-        
+        print("=" * 60 + "\n")
+
+        user = User.objects.create_user(
+            username=username, email=email, password=password,
+            is_active=True, first_name=nom,
+        )
+
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
         if departement:
             profil.departement = departement
         profil.changement_mdp_obligatoire = True
         profil.save()
 
-        html_content = EMAIL_HTML_TEMPLATE.replace("{{ username }}", username) \
+        html_content = EMAIL_HTML_TEMPLATE.replace("{{ username }}", nom) \
                                           .replace("{{ email }}", email) \
                                           .replace("{{ password }}", password) \
                                           .replace("{{ site_url }}", getattr(settings, 'SITE_URL', 'http://localhost:5173'))
-        
-        texte_brut = (f"Bonjour {username},\n\n"
+
+        texte_brut = (f"Bonjour {nom},\n\n"
                       f"Votre compte SAE a été créé.\n\n"
                       f"Email : {email}\n"
                       f"Mot de passe : {password}\n\n"
@@ -665,28 +774,43 @@ class AdminUserListView(generics.ListCreateAPIView):
             print(f"❌ ERREUR CRITIQUE D'ENVOI D'EMAIL : {e}")
 
         return Response({
-            "id": user.id, 
-            "username": user.username, 
+            "id": user.id,
+            "username": user.username,
+            "nom": nom,
             "email": user.email,
-            "est_admin": False, 
+            "est_admin": False,
             "est_actif": True,
             "message": "Utilisateur créé avec succès. Un e-mail avec les identifiants a été envoyé."
         }, status=status.HTTP_201_CREATED)
-
 
 class AdminUserToggleActiveView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
         try:
-            user = User.objects.get(pk=pk, is_superuser=False)
-            user.is_active = not user.is_active
-            user.save()
-            return Response({"est_actif": user.is_active})
+            user = User.objects.get(pk=pk)
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
+        if user.is_superuser:
+            return Response({"erreur": "Le superadministrateur ne peut pas être désactivé."}, status=status.HTTP_400_BAD_REQUEST)
+        if user == request.user:
+            return Response({"erreur": "Vous ne pouvez pas désactiver votre propre compte."}, status=status.HTTP_400_BAD_REQUEST)
 
+        user.is_active = not user.is_active
+        user.save()
+
+        # Coupe toutes les sessions si désactivé
+        if not user.is_active:
+            for session in SessionAppareil.objects.filter(utilisateur=user, est_active=True):
+                session.est_active = False
+                session.save()
+                try:
+                    session.token.delete()
+                except Exception:
+                    pass
+
+        return Response({"est_actif": user.is_active})
 class AdminUserToggleAdminView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -696,17 +820,22 @@ class AdminUserToggleAdminView(APIView):
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
+        # Règle métier : utilisateur INACTIF = aucun changement de rôle
+        if not user.is_active:
+            return Response(
+                {"erreur": "Un utilisateur inactif ne peut pas être promu ni rétrogradé. Réactivez d'abord son compte."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         est_admin = bool(request.data.get('est_admin', False))
         departement_id = request.data.get('departement_id')
 
         profil, _ = ProfilUtilisateur.objects.get_or_create(utilisateur=user)
 
         if est_admin:
-            # 👑 PROMOTION ADMIN : on vide le département
             user.is_staff = True
             profil.departement = None
         else:
-            # 👤 RÉTROGRADATION : département OBLIGATOIRE
             if not departement_id:
                 return Response(
                     {"erreur": "Un département est obligatoire pour un utilisateur non-admin."},
@@ -721,22 +850,27 @@ class AdminUserToggleAdminView(APIView):
 
         user.save()
         profil.save()
-
         dept_data = None
         if profil.departement:
             dept_data = {"id": profil.departement.id, "nom": profil.departement.nom}
 
-        return Response({
-            "est_admin": user.is_staff,
-            "departement": dept_data,
-        })
+        return Response({"est_admin": user.is_staff, "departement": dept_data})
+
 
 class AdminUserResetPasswordView(APIView):
     permission_classes = [IsAdminUser]
 
     def post(self, request, pk):
         try:
-            user = User.objects.get(pk=pk, is_superuser=False)
+            user = User.objects.get(pk=pk)
+            
+            # Empêcher la modification de son propre mot de passe via cette vue
+            if user == request.user:
+                return Response({"erreur": "Utilisez la page de changement de mot de passe pour modifier le vôtre."}, status=status.HTTP_400_BAD_REQUEST)
+            
+            # Empêcher la modification d'un superuser
+            if user.is_superuser:
+                return Response({"erreur": "Impossible de modifier un super-utilisateur."}, status=status.HTTP_400_BAD_REQUEST)
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
 
@@ -759,10 +893,15 @@ class AdminUserResetPasswordView(APIView):
         profil.changement_mdp_obligatoire = True
         profil.save()
 
-        try:
-            Token.objects.filter(user=user).delete()
-        except Exception:
-            pass
+        # 🆕 Déconnecter tous les appareils (supprime tokens + sessions)
+        for session in SessionAppareil.objects.filter(utilisateur=user, est_active=True):
+            session.est_active = False
+            session.save()
+            try:
+                session.token.delete()
+            except Exception:
+                pass
+        Token.objects.filter(user=user).delete()
 
         html_content = RESET_EMAIL_HTML_TEMPLATE.replace("{{ username }}", user.username) \
                                                 .replace("{{ password }}", nouveau_mdp) \
@@ -826,6 +965,9 @@ class AdminUserDepartementsAutorisesView(APIView):
             return Response({"erreur": "Utilisateur introuvable."}, status=404)
 
 
+# ===========================================================================
+# DOMAINES EMAIL
+# ===========================================================================
 class DomaineEmailViewSet(viewsets.ModelViewSet):
     queryset = DomaineEmail.objects.all()
     serializer_class = DomaineEmailSerializer
@@ -836,31 +978,35 @@ class DomaineEmailViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         domaine_brut = serializer.validated_data.get('domaine', '').strip().lower()
         domaine_propre = domaine_brut.lstrip('@')
-        
+
         if DomaineEmail.objects.filter(domaine__iexact=domaine_propre).exists():
             raise ValidationError({"domaine": "Ce domaine est déjà configuré."})
-        
+
         serializer.save(domaine=domaine_propre)
 
 
 class DomaineEmailBulkView(APIView):
     permission_classes = [IsAdminUser]
-    
+
     def post(self, request):
         action = request.data.get('action')
         domaines_ids = request.data.get('domaines', [])
-        
+
         if not domaines_ids:
             return Response({"erreur": "Aucun domaine sélectionné."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         if action not in ['activer', 'desactiver']:
             return Response({"erreur": "Action invalide."}, status=status.HTTP_400_BAD_REQUEST)
-        
+
         DomaineEmail.objects.filter(id__in=domaines_ids).update(actif=(action == 'activer'))
         return Response({"succes": f"Domaines {action}s avec succès."})
 
 
-_reset_codes: dict[str, dict] = {}
+# ===========================================================================
+# MOT DE PASSE OUBLIÉ
+# ===========================================================================
+_reset_codes: dict = {}
+
 
 class MotDePasseOublieView(APIView):
     permission_classes = [AllowAny]
@@ -913,6 +1059,16 @@ class ConfirmerMotDePasseOublieView(APIView):
             user = User.objects.get(email__iexact=email)
             user.set_password(nouveau_mdp)
             user.save()
+
+            # 🆕 Déconnecter tous les appareils après reset
+            for session in SessionAppareil.objects.filter(utilisateur=user, est_active=True):
+                session.est_active = False
+                session.save()
+                try:
+                    session.token.delete()
+                except Exception:
+                    pass
+            Token.objects.filter(user=user).delete()
         except User.DoesNotExist:
             return Response({"erreur": "Utilisateur introuvable."}, status=status.HTTP_404_NOT_FOUND)
         _reset_codes.pop(email, None)

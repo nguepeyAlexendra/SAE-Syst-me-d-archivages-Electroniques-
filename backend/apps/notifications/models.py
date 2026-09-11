@@ -1,39 +1,45 @@
 from django.db import models
-from django.contrib.auth.models import User
-
+from django.conf import settings
+from apps.documents.models import Document
 
 class Notification(models.Model):
-    """
-    Une notification in-app pour un utilisateur (icône cloche dans la barre de navigation).
-    Créée automatiquement par le pipeline ETL (validation, rejet, accès accordé...).
-    """
+    # Choix pour le type de notification
+    TYPE_CHOICES = [
+        ('validation', 'Validation'),
+        ('rejet', 'Rejet'),
+        ('partage', 'Partage'),
+        ('acces_accorde', 'Accès accordé'),
+        ('nouveau_document', 'Nouveau document'),
+    ]
 
-    class TypeNotification(models.TextChoices):
-        VALIDATION = 'validation', 'Document validé'
-        REJET = 'rejet', 'Document rejeté'
-        ACCES_ACCORDE = 'acces_accorde', 'Accès à un document accordé'
-
-    destinataire = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
-    message = models.CharField(max_length=255)
-    type_notification = models.CharField(max_length=20, choices=TypeNotification.choices)
-
-    # Référence croisée vers l'app documents, via chaîne 'app.Modele' pour éviter
-    # un import circulaire entre les deux apps.
-    document = models.ForeignKey(
-        'documents.Document', on_delete=models.CASCADE, null=True, blank=True, related_name='notifications'
+    destinataire = models.ForeignKey(
+        settings.AUTH_USER_MODEL, # Ou 'accounts.User' selon votre configuration
+        on_delete=models.CASCADE,
+        related_name='notifications'
     )
-
+    
+    titre = models.CharField(max_length=255)  # ✅ CHAMP AJOUTÉ
+    message = models.TextField()
+    type = models.CharField(max_length=20, choices=TYPE_CHOICES)  # ✅ CHAMP AJOUTÉ
+    
+    document = models.ForeignKey(
+        Document, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='notifications_lien'
+    )
+    
     lue = models.BooleanField(default=False)
     date_creation = models.DateTimeField(auto_now_add=True)
-
-    # --- Suivi de l'envoi email (complément à la notification in-app) ---
-    email_envoye = models.BooleanField(default=False)
+    date_lecture = models.DateTimeField(null=True, blank=True)
     date_envoi_email = models.DateTimeField(null=True, blank=True)
-
-    def __str__(self):
-        statut = "lue" if self.lue else "non lue"
-        return f"{self.destinataire.username} - {self.message} ({statut})"
+    email_envoye = models.BooleanField(default=False)
 
     class Meta:
         ordering = ['-date_creation']
         verbose_name = "Notification"
+        verbose_name_plural = "Notifications"
+
+    def __str__(self):
+        return f"[{self.get_type_display()}] {self.titre} pour {self.destinataire.username}"

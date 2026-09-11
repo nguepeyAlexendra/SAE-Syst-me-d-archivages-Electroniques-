@@ -122,10 +122,12 @@ CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[
 ])
 
 # --- Django REST Framework ---
+MAX_APPAREILS_PAR_UTILISATEUR = 3
+
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
-        'rest_framework.authentication.TokenAuthentication',
-        'rest_framework.authentication.SessionAuthentication',
+        'apps.accounts.authentication.TokenSessionAuthentication',  # 🆕 Remplace TokenAuthentication
+        'rest_framework.authentication.SessionAuthentication',       # ← garde (pour l'admin Django)
     ],
     'DEFAULT_PERMISSION_CLASSES': [
         'rest_framework.permissions.IsAuthenticated',

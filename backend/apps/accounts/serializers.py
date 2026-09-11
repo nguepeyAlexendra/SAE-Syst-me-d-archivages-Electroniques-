@@ -44,12 +44,13 @@ class LoginSerializer(serializers.Serializer):
 # ✅ NOUVEAU : Ce sérialiseur prépare les données de l'utilisateur pour le frontend
 class UserSerializer(serializers.ModelSerializer):
     est_admin = serializers.BooleanField(source='is_staff', read_only=True)
+    nom = serializers.CharField(read_only=True)
     departement = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        # ⚠️ 'departement' est maintenant officiellement dans la réponse JSON
-        fields = ['id', 'username', 'email', 'est_admin', 'departement']
+        # ⚠️ 'nom' et 'departement' sont maintenant officiellement dans la réponse JSON
+        fields = ['id', 'nom', 'username', 'email', 'est_admin', 'departement']
 
     def get_departement(self, obj):
         if hasattr(obj, 'profil') and obj.profil.departement:
