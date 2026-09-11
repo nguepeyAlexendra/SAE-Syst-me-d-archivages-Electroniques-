@@ -22,6 +22,8 @@ import NotFound from './pages/errors/NotFound';
 import AccessDenied from './pages/errors/AccessDenied';
 import { useAuth } from './contexts/AuthContext';
 import Assistant from './pages/assistant/Assistant';
+import HelpCenter from './pages/aide/HelpCenter'; 
+import NotificationsPage from './pages/notifications/NotificationsPage'// ✅ NOUVEL IMPORT
 
 function PageProtegee({ children }: { children: React.ReactNode }) {
   return (
@@ -59,7 +61,6 @@ export default function App() {
         <Route path="/a-propos" element={<APropos />} />
         <Route path="/login" element={<Connexion />} />
         <Route path="/connexion" element={<Connexion />} />
-        {/* ✅ Route 2FA au niveau racine (AVANT connexion, donc non protégée) */}
         <Route path="/2fa" element={<TwoFactor />} />
         <Route path="/403" element={<AccessDenied />} />
 
@@ -74,6 +75,11 @@ export default function App() {
         <Route path="/documents/:id" element={<PageProtegee><DetailDocument /></PageProtegee>} />
         <Route path="/profil" element={<PageProtegee><Profil /></PageProtegee>} />
         <Route path="/assistant" element={<PageProtegee><Assistant /></PageProtegee>} />
+        
+        {/* ✅ NOUVELLE ROUTE CENTRE D'AIDE */}
+        <Route path="/aide" element={<PageProtegee><HelpCenter /></PageProtegee>} />
+        <Route path="/notifications" element={<PageProtegee><NotificationsPage /></PageProtegee>} /> {/* ✅ AJOUT */}
+
         <Route path="/admin" element={<PageProtegeeOutlet />}>
           <Route index element={<DashboardAdmin />} />
           <Route path="logs" element={<LogsPage />} />

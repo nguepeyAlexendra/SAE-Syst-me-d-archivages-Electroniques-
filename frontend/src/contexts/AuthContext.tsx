@@ -1,10 +1,22 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
 import type { Utilisateur } from '../api/auth';
+import apiClient from '../api/client';
+
+export interface Session {
+  id: number;
+  appareil: string;
+  ip: string | null;
+  cree_le: string;
+  derniere_activite: string;
+  est_cet_appareil: boolean;
+}
 
 interface AuthContextType {
   utilisateur: Utilisateur | null;
   seConnecter: (token: string, utilisateurConnecte: Utilisateur) => void;
-  seDeconnecter: () => void;
+  seDeconnecter: () => Promise<void>;
+  listerSessions: () => Promise<Session[]>;
+  deconnecterSession: (id: number) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -35,6 +47,15 @@ function lireUtilisateur(): Utilisateur | null {
   }
 }
 
+/** Nettoie le localStorage (utilisé en local ET après appel backend) */
+function _nettoyerLocal() {
+  try {
+    localStorage.removeItem('token');
+    localStorage.removeItem('utilisateur');
+    localStorage.removeItem('trusted_device_token');
+  } catch {}
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [utilisateur, setUtilisateur] = useState<Utilisateur | null>(lireUtilisateur);
 
@@ -46,16 +67,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUtilisateur(utilisateurConnecte);
   }
 
-  function seDeconnecter() {
-    try {
-      localStorage.removeItem('token');
-      localStorage.removeItem('utilisateur');
-    } catch {}
+  async function seDeconnecter() {
+    // 1. Informer le backend (invalide la session + supprime le token)
+    const token = localStorage.getItem('token');
+    if (token) {
+      try {
+        await apiClient.post('/accounts/deconnexion/');
+      } catch {
+        // Silencieux : même si le token est déjà invalide, on nettoie côté client
+      }
+    }
+
+    // 2. Nettoyage local
+    _nettoyerLocal();
     setUtilisateur(null);
   }
 
+  /** Liste tous les appareils connectés de l'utilisateur courant */
+  async function listerSessions(): Promise<Session[]> {
+    const r = await apiClient.get<Session[]>('/accounts/mes-sessions/');
+    return r.data;
+  }
+
+  /** Déconnecte un appareil spécifique à distance */
+  async function deconnecterSession(id: number): Promise<void> {
+    await apiClient.delete(`/accounts/mes-sessions/${id}/`);
+  }
+
   return (
-    <AuthContext.Provider value={{ utilisateur, seConnecter, seDeconnecter }}>
+    <AuthContext.Provider
+      value={{ utilisateur, seConnecter, seDeconnecter, listerSessions, deconnecterSession }}
+    >
       {children}
     </AuthContext.Provider>
   );

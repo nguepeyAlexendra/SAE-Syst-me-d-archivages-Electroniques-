@@ -29,6 +29,7 @@ import TagFilterPopover from '../../components/TagFilterPopover';
 import FiltreDate, { type FiltreDateValeur, FILTRE_DATE_VIDE } from '../../components/FiltreDate';
 import { useSelection } from '../../hooks/useSelection';
 import { toast } from 'sonner';
+import { AIDropdownTrigger } from '../../components/ui/AIIcon';
 
 export default function DashboardAdmin() {
   const { utilisateur } = useAuth();
@@ -266,15 +267,18 @@ export default function DashboardAdmin() {
   if (chargement) return <div className="p-8 text-muted-foreground">{t.commun.charger}</div>;
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-8">
+    <div className="flex flex-1 flex-col gap-4 p-4 md:p-8 min-w-0 w-full">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">{t.dashboard.admin_titre}</h1>
           <p className="text-sm text-muted-foreground">{t.dashboard.admin_bienvenue}, {utilisateur?.username}</p>
         </div>
-        <Button variant="outline" size="sm" onClick={rafraichir}>
-          <RefreshCw className="h-4 w-4 mr-1" /> {t.dashboard.actualiser}
-        </Button>
+        <div className="flex items-center gap-2">
+          <AIDropdownTrigger />
+          <Button variant="outline" size="sm" onClick={rafraichir}>
+            <RefreshCw className="h-4 w-4 mr-1" /> {t.dashboard.actualiser}
+          </Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -425,8 +429,8 @@ export default function DashboardAdmin() {
 
       <Card>
         <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <CardTitle className="text-base">{t.dashboard.derniers_documents}</CardTitle>
               <ToggleGroup type="single" value={ongletDocs} onValueChange={(v) => { v && setOngletDocs(v); setPageDocs(1); }} variant="outline">
                 <ToggleGroupItem value="documents" className="gap-1.5 text-xs"><FileText className="h-3.5 w-3.5" /> {t.documents.groupe_docs}</ToggleGroupItem>
@@ -435,8 +439,8 @@ export default function DashboardAdmin() {
                 <ToggleGroupItem value="confidentiels" className="gap-1.5 text-xs"><ShieldCheck className="h-3.5 w-3.5" /> {t.documents.confidentiel_titre}</ToggleGroupItem>
               </ToggleGroup>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1 min-w-[160px] max-w-[220px]">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative min-w-[160px] max-w-[220px]">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   type="text"
@@ -501,6 +505,7 @@ export default function DashboardAdmin() {
                   etatConfidentiel={tousConfidentiels ? 'remove' : 'add'}
                   etatArchive={tousArchives ? 'remove' : 'add'}
                 />
+                <div className="overflow-x-auto">
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -605,6 +610,7 @@ export default function DashboardAdmin() {
                     })()}
                   </TableBody>
                 </Table>
+                </div>
                 <TableFooter
                   currentPage={pageDocs}
                   totalPages={totalPagesAffiches}

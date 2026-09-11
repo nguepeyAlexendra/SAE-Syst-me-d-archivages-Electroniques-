@@ -1,0 +1,76 @@
+@startuml
+skinparam backgroundColor #FEFEFE
+skinparam packageStyle rectangle
+skinparam roundcorner 8
+
+package "Enums" {
+    enum TypeSource { NUMERIQUE, SCAN }
+    enum GroupeDocument { DOCUMENTS, IMAGES, MEDIAS }
+    enum StatutDocument { EN_ATTENTE, EN_COURS, VALIDE, REJETE }
+    enum TypeAction { ARCHIVAGE, REJET, VALIDATION, MODIFICATION, PARTAGE }
+    enum TypeNotification { DEPOT_DE_DOCUMENT, REJET_DE_DOCUMENT }
+    enum RoleMessage { USER, ASSISTANT }
+}
+
+package "accounts" {
+    class User { + id : UUID, + username : String, + email : String, + password : String, + is_staff : Boolean, + is_active : Boolean, + is_superuser : Boolean }
+    class ProfilUtilisateur { + photo : Image, + telephone : String, + two_fa_active : Boolean, + changement_mdp_obligatoire : Boolean, + code_2fa : String, + code_2fa_expiration : DateTime, + token_2fa_temporaire : String, + tentatives_2fa_echouees : Integer, + date_derniere_demande_code : DateTime, + nb_codes_envoyes_heure : Integer }
+    class DomaineEmail { + id : UUID, + domaine : String, + actif : Boolean }
+    class ConfigurationConnexion { + {static} instance : ConfigurationConnexion, + two_fa_global_active : Boolean, + delai_expiration_code : Integer, + max_tentatives_verrouillage : Integer }
+    class AppareilApprouve { + id : UUID, + user_agent : String, + token : String, + date_expiration : DateTime, + date_creation : DateTime, + dernier_usage : DateTime }
+}
+
+package "documents" {
+    class Departement { + id : UUID, + nom : String, + nom_en : String, + description : String }
+    class Categorie { + id : UUID, + nom : String, + description : String }
+    class Tag { + id : UUID, + nom : String, + couleur : String }
+    class Document { + id : UUID, + titre : String, + fichier : File, + miniature : Image, + apercu_pdf : File, + type_source : TypeSource, + depose_par : User, + date_depot : DateTime, + taille_fichier : Integer, + type_mime : String, + groupe : GroupeDocument, + contenu_texte : Text, + statut : StatutDocument, + log_pipeline : Text, + cause_rejet : String, + cause_rejet_en : String, + est_confidentiel : Boolean, + est_epingle : Boolean, + est_archive : Boolean, + est_supprime : Boolean, + date_suppression : DateTime }
+    class LogAction { + id : UUID, + type_action : TypeAction, + date_action : DateTime, + details : JSON }
+    class ConnexionLog { + id : UUID, + ip : String, + user_agent : String, + date_connexion : DateTime, + succes : Boolean }
+    class StorageSnapshot { + id : UUID, + date_snapshot : DateTime, + espace_utilise : Integer, + nombre_fichiers : Integer, + par_type : JSON }
+}
+
+package "notifications" {
+    class Notification { + id : UUID, + destinataire : User, + message : String, + type_notification : TypeNotification, + document : Document, + lue : Boolean, + date_creation : DateTime, + email_envoye : Boolean, + date_envoi_email : DateTime }
+}
+
+package "assistant" {
+    class Conversation { + id : UUID, + utilisateur : User, + titre : String, + est_favori : Boolean, + est_lu : Boolean, + cree_le : DateTime }
+    class Message { + id : UUID, + conversation : Conversation, + role : RoleMessage, + contenu : Text, + sources : JSON, + cree_le : DateTime }
+}
+
+package "services" {
+    class PipelineETL { + {static} traiter_fichier(doc), + verifier_mime(), + scanner_antivirus(), + extraire_metadonnees(), + generer_miniature(), + generer_apercu_pdf() }
+    class StorageService { + {static} upload(file, bucket), + {static} download(key), + {static} delete(key), + {static} presigned_url(key) }
+    class IndexationRAG { + {static} chunk_text(texte), + {static} generer_embedding(chunk), + {static} indexer(es), + {static} reindexer(doc) }
+    class RechercheDocumentaire { + {static} full_text(query, filtres), + {static} vectorielle(embedding, top_k), + appliquer_filtres_acces() }
+    class AssistantRAG { + {static} construire_contexte(chunks), + {static} appeler_llm(prompt), + {static} streamer_reponse() }
+    class ScannerAgent { + {static} surveiller_dossier(), + {static} detecter_nouveau_fichier(), + {static} envoyer_au_backend() }
+    class NotificationService { + {static} creer_notification(), + {static} envoyer_email(), + {static} marquer_lue() }
+    class PermissionService { + {static} peut_voir(user, doc), + {static} filtrer_par_droit(user, qs), + {static} appliquer_confidentialite() }
+}
+
+User "1" -- "1" ProfilUtilisateur
+ProfilUtilisateur "1" -- "1" Departement
+ProfilUtilisateur "1" -- "0..*" Departement
+Departement "1" -- "0..*" User
+User "1" -- "0..3" AppareilApprouve
+DomaineEmail ..> User
+ConfigurationConnexion ..> ProfilUtilisateur
+User "1" -- "0..*" Document
+Document "0..*" -- "1" Departement
+Document "0..*" -- "0..1" Categorie
+Categorie "1" -- "0..*" Document
+Document "0..*" -- "0..*" Tag
+Tag "1" -- "0..*" Document
+Document "0..*" -- "0..*" User
+Document "0..*" -- "0..*" Departement
+Document "1" -- "0..*" LogAction
+LogAction "0..*" -- "1" User
+User "1" -- "0..*" ConnexionLog
+User "1" -- "0..*" Notification
+Notification "0..*" -- "1" Document
+User "1" -- "0..*" Conversation
+Conversation "1" -- "0..*" Message
+Message "0..*" -- "0..*" Document
+@enduml

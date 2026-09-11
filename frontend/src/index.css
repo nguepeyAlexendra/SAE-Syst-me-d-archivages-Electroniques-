@@ -44,17 +44,18 @@
   --input: hsl(40 33% 73%);
   --ring: hsl(46 68% 47%);
 
-  /* --- Sidebar (accordé au registre) --- */
-  --sidebar-background: hsl(43 47% 94%);
-  --sidebar-foreground: hsl(43 15% 16%);
-  --sidebar-primary: hsl(46 68% 47%);
-  --sidebar-primary-foreground: hsl(43 15% 16%);
-  --sidebar-accent: hsl(96 32% 88%);
-  --sidebar-accent-foreground: hsl(96 45% 21%);
-  --sidebar-border: hsl(40 33% 73%);
-  --sidebar-ring: hsl(46 68% 47%);
-  --sidebar: hsl(43 47% 94%);
-
+  /* --- Thème sidebar : couleur primaire --- */
+html.sidebar-colored {
+  --sidebar: color-mix(in srgb, var(--primary) 80%, black);
+  --sidebar-background: var(--sidebar);
+  --sidebar-foreground: hsl(0 0% 100%);
+  --sidebar-primary: hsl(0 0% 100%);
+  --sidebar-primary-foreground: var(--primary);
+  --sidebar-accent: hsl(0 0% 100% / 0.16);
+  --sidebar-accent-foreground: hsl(0 0% 100%);
+  --sidebar-border: hsl(0 0% 100% / 0.22);
+  --sidebar-ring: hsl(0 0% 100%);
+}
   /* --- Graphiques Recharts --- */
   --chart-1: hsl(46 68% 47%);
   --chart-2: hsl(96 45% 21%);
@@ -101,16 +102,18 @@
   --input: hsl(46 27% 18%);
   --ring: hsl(46 68% 55%);
 
-  /* --- Sidebar / navigaton — dark --- */
-  --sidebar-background: hsl(43 16% 10%);
-  --sidebar-foreground: hsl(46 47% 90%);
-  --sidebar-primary: hsl(46 68% 55%);
-  --sidebar-primary-foreground: hsl(48 17% 6%);
-  --sidebar-accent: hsl(96 24% 16%);
-  --sidebar-accent-foreground: hsl(96 38% 65%);
-  --sidebar-border: hsl(46 27% 18%);
-  --sidebar-ring: hsl(46 68% 55%);
-  --sidebar: hsl(43 16% 12%);
+ /* --- Thème sidebar : sombre --- */
+html.sidebar-dark {
+  --sidebar: hsl(240 12% 8%);
+  --sidebar-background: hsl(240 12% 8%);
+  --sidebar-foreground: hsl(240 10% 90%);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: hsl(0 0% 100%);
+  --sidebar-accent: hsl(240 10% 16%);
+  --sidebar-accent-foreground: hsl(240 10% 90%);
+  --sidebar-border: hsl(240 8% 16%);
+  --sidebar-ring: var(--primary);
+}
 
   /* --- Graphiques Recharts — dark --- */
   --chart-1: hsl(46 68% 55%);
@@ -120,6 +123,135 @@
   --chart-5: hsl(46 47% 90%);
 }
 
+/* --- Thèmes alternatifs (surcharges de --primary) --- */
+/* ============ THÈMES — mode clair (fond teinté) ============ */
+.theme-violet {
+  --primary: hsl(248 47% 55%); --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(248 47% 55%); --chart-1: hsl(248 47% 55%);
+  --background: hsl(248 35% 96%); --card: hsl(0 0% 100%); --popover: hsl(0 0% 100%);
+  --secondary: hsl(248 28% 92%); --secondary-foreground: hsl(248 20% 16%);
+  --muted: hsl(248 28% 92%); --muted-foreground: hsl(248 12% 42%);
+  --border: hsl(248 22% 85%); --input: hsl(248 22% 85%);
+}
+.theme-steel {
+  --primary: hsl(201 37% 44%); --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(201 37% 44%); --chart-1: hsl(201 37% 44%);
+  --background: hsl(201 35% 96%); --card: hsl(0 0% 100%); --popover: hsl(0 0% 100%);
+  --secondary: hsl(201 25% 92%); --secondary-foreground: hsl(201 25% 16%);
+  --muted: hsl(201 25% 92%); --muted-foreground: hsl(201 15% 40%);
+  --border: hsl(201 20% 84%); --input: hsl(201 20% 84%);
+}
+.theme-crimson {
+  --primary: hsl(352 47% 55%); --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(352 47% 55%); --chart-1: hsl(352 47% 55%);
+  --background: hsl(352 40% 97%); --card: hsl(0 0% 100%); --popover: hsl(0 0% 100%);
+  --secondary: hsl(352 30% 93%); --secondary-foreground: hsl(352 30% 16%);
+  --muted: hsl(352 30% 93%); --muted-foreground: hsl(352 15% 40%);
+  --border: hsl(352 25% 86%); --input: hsl(352 25% 86%);
+}
+.theme-brown {
+  --primary: hsl(353 19% 42%); --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(353 19% 42%); --chart-1: hsl(353 19% 42%);
+  --background: hsl(353 18% 96%); --card: hsl(0 0% 100%); --popover: hsl(0 0% 100%);
+  --secondary: hsl(353 14% 92%); --secondary-foreground: hsl(353 15% 16%);
+  --muted: hsl(353 14% 92%); --muted-foreground: hsl(353 10% 40%);
+  --border: hsl(353 12% 85%); --input: hsl(353 12% 85%);
+}
+.theme-vert {
+  --primary: hsl(154 57% 42%); --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(154 57% 42%); --chart-1: hsl(154 57% 42%);
+  --background: hsl(154 35% 96%); --card: hsl(0 0% 100%); --popover: hsl(0 0% 100%);
+  --secondary: hsl(154 25% 92%); --secondary-foreground: hsl(154 30% 14%);
+  --muted: hsl(154 25% 92%); --muted-foreground: hsl(154 15% 35%);
+  --border: hsl(154 20% 84%); --input: hsl(154 20% 84%);
+}
+.theme-or {
+  --primary: hsl(46 68% 47%); --primary-foreground: hsl(43 15% 16%);
+  --ring: hsl(46 68% 47%); --chart-1: hsl(46 68% 47%);
+}
+
+.theme-entreprise {
+  --primary: hsl(209 59% 30%);            /* bleu corporate #1F4E79 */
+  --primary-foreground: hsl(0 0% 100%);
+  --ring: hsl(209 59% 30%);
+  --chart-1: hsl(209 59% 30%);
+  --background: hsl(210 30% 97%);         /* fond gris-bleu très clair */
+  --card: hsl(0 0% 100%);
+  --popover: hsl(0 0% 100%);
+  --secondary: hsl(210 25% 93%);
+  --secondary-foreground: hsl(210 30% 15%);
+  --muted: hsl(210 25% 93%);
+  --muted-foreground: hsl(212 12% 40%);
+  --accent: hsl(209 40% 90%);
+  --accent-foreground: hsl(209 60% 22%);
+  --border: hsl(210 20% 84%);
+  --input: hsl(210 20% 84%);
+}
+/* ============ THÈMES — mode sombre (fond noir teinté) ============ */
+.dark.theme-violet {
+  --background: hsl(248 14% 7%); --foreground: hsl(248 20% 92%);
+  --card: hsl(248 11% 10%); --card-foreground: hsl(248 20% 92%);
+  --popover: hsl(248 11% 9%); --popover-foreground: hsl(248 20% 92%);
+  --secondary: hsl(248 9% 14%); --secondary-foreground: hsl(248 20% 92%);
+  --muted: hsl(248 9% 14%); --muted-foreground: hsl(248 8% 62%);
+  --border: hsl(248 11% 18%); --input: hsl(248 11% 18%);
+}
+.dark.theme-steel {
+  --background: hsl(205 20% 7%); --foreground: hsl(201 20% 92%);
+  --card: hsl(205 15% 10%); --card-foreground: hsl(201 20% 92%);
+  --popover: hsl(205 15% 9%); --popover-foreground: hsl(201 20% 92%);
+  --secondary: hsl(205 11% 14%); --secondary-foreground: hsl(201 20% 92%);
+  --muted: hsl(205 11% 14%); --muted-foreground: hsl(203 8% 62%);
+  --border: hsl(205 14% 18%); --input: hsl(205 14% 18%);
+}
+.dark.theme-crimson {
+  --background: hsl(352 16% 7%); --foreground: hsl(352 25% 93%);
+  --card: hsl(352 12% 10%); --card-foreground: hsl(352 25% 93%);
+  --popover: hsl(352 12% 9%); --popover-foreground: hsl(352 25% 93%);
+  --secondary: hsl(352 9% 14%); --secondary-foreground: hsl(352 25% 93%);
+  --muted: hsl(352 9% 14%); --muted-foreground: hsl(352 8% 65%);
+  --border: hsl(352 12% 18%); --input: hsl(352 12% 18%);
+}
+.dark.theme-brown {
+  --background: hsl(353 12% 7%); --foreground: hsl(353 15% 92%);
+  --card: hsl(353 10% 10%); --card-foreground: hsl(353 15% 92%);
+  --popover: hsl(353 10% 9%); --popover-foreground: hsl(353 15% 92%);
+  --secondary: hsl(353 8% 14%); --secondary-foreground: hsl(353 15% 92%);
+  --muted: hsl(353 8% 14%); --muted-foreground: hsl(353 7% 65%);
+  --border: hsl(353 10% 18%); --input: hsl(353 10% 18%);
+}
+.dark.theme-vert {
+  --background: hsl(160 14% 6%); --foreground: hsl(160 15% 92%);
+  --card: hsl(160 11% 10%); --card-foreground: hsl(160 15% 92%);
+  --popover: hsl(160 11% 9%); --popover-foreground: hsl(160 15% 92%);
+  --secondary: hsl(160 9% 14%); --secondary-foreground: hsl(160 15% 92%);
+  --muted: hsl(160 9% 14%); --muted-foreground: hsl(160 8% 62%);
+  --border: hsl(160 11% 18%); --input: hsl(160 11% 18%);
+}
+
+.dark.theme-entreprise {
+  --background: hsl(213 25% 8%);          /* bleu nuit profond */
+  --foreground: hsl(210 20% 92%);
+  --card: hsl(213 20% 11%);
+  --card-foreground: hsl(210 20% 92%);
+  --popover: hsl(213 20% 10%);
+  --popover-foreground: hsl(210 20% 92%);
+  --primary: hsl(209 75% 55%);            /* bleu plus lumineux en sombre */
+  --primary-foreground: hsl(0 0% 100%);
+  --secondary: hsl(213 16% 15%);
+  --secondary-foreground: hsl(210 20% 92%);
+  --muted: hsl(213 16% 15%);
+  --muted-foreground: hsl(212 10% 62%);
+  --accent: hsl(209 40% 18%);
+  --accent-foreground: hsl(209 70% 80%);
+  --border: hsl(213 18% 18%);
+  --input: hsl(213 18% 18%);
+  --ring: hsl(209 75% 55%);
+  --chart-1: hsl(209 75% 55%);
+}
+/* .dark.theme-or = ton dark actuel (fond chaud), rien à ajouter */
+
+/* --- Or : garde ton dark actuel (fond chaud #15140F), rien à ajouter --- */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);

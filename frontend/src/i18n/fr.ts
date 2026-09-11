@@ -23,6 +23,13 @@ const fr = {
     archives: 'Archives',
     intelligence: 'Intelligence',
     assistant_ia: 'Assistant IA',
+    centre_aide: "Centre d'aide",
+    description_aide: "Tout ce dont vous avez besoin pour maîtriser le SAE.",
+    prise_en_main: "Prise en main",
+    guide_utilisateur: "Guide Utilisateur",
+    guide_admin: "Guide Admin",
+    faq_depannage: "FAQ & Dépannage",
+    aucune_notification: "Aucune notification",
   },
   auth: {
     connexion: 'Connexion',
@@ -637,6 +644,8 @@ const fr = {
     retour: 'Retour',
   },
 
+  
+
   landing: {
     bandeau: { texte: 'SAE est maintenant disponible chez InnoTechLab.', lien: 'Connectez-vous dès aujourd’hui.' },
     nav: {
@@ -731,6 +740,24 @@ const fr = {
       copyright: '© 2026 SAE — InnoTechLab. Conçu et développé par NGUEYEP NJOMO EMMANUELLE ALEXANDRA',
     },
   },
+
+    preferences: {
+    titre: 'Préférences',
+    apparence: 'Apparence',
+    couleur_principale: 'Couleur principale',
+    mode_sombre: 'Mode sombre',
+    langue: 'Langue',
+    densite: 'Densité',
+    confortable: 'Confortable',
+    compact: 'Compact',
+    confort: 'Confort',
+    page_accueil: "Page d'accueil",
+    lignes_par_page: 'Lignes par page',
+    email_hebdo: 'Résumé email hebdomadaire',
+    reinitialiser: 'Réinitialiser les préférences',
+  },
 };
+
+
 export default fr;
 export type Traductions = typeof fr;

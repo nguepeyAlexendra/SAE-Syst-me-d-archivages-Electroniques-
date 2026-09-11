@@ -25,6 +25,13 @@ const en: Traductions = {
     archives: 'Archives',
     intelligence: 'Intelligence',
     assistant_ia: 'AI Assistant',
+    centre_aide: "Help Center",
+    description_aide: "Everything you need to master the SAE.",
+    prise_en_main: "Getting Started",
+    guide_utilisateur: "User Guide",
+    guide_admin: "Admin Guide",
+    faq_depannage: "FAQ & Troubleshooting",
+    aucune_notification: "No notifications",
   },
   auth: {
     connexion: 'Sign in',
@@ -732,6 +739,22 @@ const en: Traductions = {
       informations: 'Information', localisation: 'InnoTechLab — Cameroon', horaires: 'Mon – Fri: 8am – 5pm',
       copyright: '© 2026 SAE — InnoTechLab. Designed and developed by NGUEYEP NJOMO EMMANUELLE ALEXANDRA',
     },
+  },
+
+    preferences: {
+    titre: 'Preferences',
+    apparence: 'Appearance',
+    couleur_principale: 'Primary color',
+    mode_sombre: 'Dark mode',
+    langue: 'Language',
+    densite: 'Density',
+    confortable: 'Comfortable',
+    compact: 'Compact',
+    confort: 'Comfort',
+    page_accueil: 'Start page',
+    lignes_par_page: 'Lines per page',
+    email_hebdo: 'Weekly email summary',
+    reinitialiser: 'Reset preferences',
   },
 };
 export default en;

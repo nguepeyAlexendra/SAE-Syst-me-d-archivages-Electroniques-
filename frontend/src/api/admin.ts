@@ -115,7 +115,7 @@ export async function listerUtilisateurs(): Promise<Utilisateur[]> {
   return reponse.data;
 }
 
-export async function creerUtilisateur(donnees: { username: string; email: string; departement_id: number }): Promise<{ id: number; username: string; email: string; est_admin: boolean; est_actif: boolean; message: string }> {
+export async function creerUtilisateur(donnees: { nom: string; email: string; departement_id: number }): Promise<{ id: number; username: string; email: string; est_admin: boolean; est_actif: boolean; message: string }> {
   const reponse = await apiClient.post('/admin/utilisateurs/', donnees);
   return reponse.data;
 }
