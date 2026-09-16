@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, type JSX } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTranslation } from '../../i18n/useTranslation';
 import { getSystemStats, listerUtilisateurs, type SystemStats, type Utilisateur } from '../../api/admin';
-import { listerDocuments, basculerFavori, listerTags, archiverDocument, desarchiverDocument, modifierDocument, type Document, type TagType } from '../../api/documents';
+import { listerDocuments, basculerFavori, listerTags, archiverDocument, desarchiverDocument, modifierDocument, type Document, type TagType, getLogs, type LogAction } from '../../api/documents';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardAction, CardFooter } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -14,11 +14,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from '../../components/ui/popover';
-import { Area, AreaChart, CartesianGrid, XAxis, Tooltip, ResponsiveContainer, YAxis } from 'recharts';
+import { Area, AreaChart, CartesianGrid, XAxis, Tooltip, ResponsiveContainer, YAxis, PieChart, Pie, Cell } from 'recharts';
+import { Progress } from '../../components/ui/progress';
+
 import {
   FileText, Image, Video, ShieldCheck, TrendingUp, TrendingDown,
   RefreshCw, MoreVertical, Heart, Download, Mail, Edit, Archive, Trash2, Lock as LockIcon, Unlock, Pin, Info,
-  LayoutList, LayoutGrid, Search, Calendar,
+  LayoutList, LayoutGrid, Search, Calendar, MessageCircle,
 } from 'lucide-react';
 import DocumentGrid from '../documents/DocumentGrid';
 import PartagerModal from '../../components/PartagerModal';
@@ -457,7 +459,6 @@ export default function DashboardAdmin() {
                 labelAucun={t.documents.date}
               />
 
-              {/* ✅ FILTRE PAR TAGS — Composant réutilisable */}
               <TagFilterPopover
                 tagsDisponibles={tagsDisponibles}
                 tagFiltre={tagFiltre}
